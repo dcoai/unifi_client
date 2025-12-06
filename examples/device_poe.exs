@@ -19,6 +19,11 @@ Mix.install([
 
 defmodule DevicePoe do
   def run do
+    if help_requested?() do
+      print_help()
+      System.halt(0)
+    end
+
     {device_ip, poe_state, ports} = parse_args()
 
     host = System.get_env("UNIFI_HOST") || raise "UNIFI_HOST environment variable required"
@@ -149,6 +154,43 @@ defmodule DevicePoe do
         IO.puts("Error: Invalid port number '#{str}'")
         System.halt(1)
     end
+  end
+
+  defp help_requested? do
+    System.argv() |> Enum.any?(&(&1 in ["-h", "--help"]))
+  end
+
+  defp print_help do
+    IO.puts("""
+    Set PoE state for ports on a UniFi switch
+
+    Usage:
+      elixir device_poe.exs <device_ip> <on|off> <ports>
+
+    Arguments:
+      device_ip        IP address of the switch
+      on|off           PoE state to set
+      ports            Port numbers (comma-separated, ranges allowed)
+
+    Port specification:
+      1,2,3            Individual ports
+      5-8              Port range (5, 6, 7, 8)
+      1,3,5-7          Mixed (ports 1, 3, 5, 6, 7)
+
+    Environment variables (required):
+      UNIFI_HOST       UniFi controller hostname or IP
+      UNIFI_USER       Username for authentication
+      UNIFI_PASS       Password for authentication
+
+    Environment variables (optional):
+      UNIFI_SITE       Site name (default: "default")
+      UNIFI_TYPE       Controller type: "udm_pro" or "controller" (default: "udm_pro")
+
+    Examples:
+      elixir device_poe.exs 10.0.1.10 off 1,2,3
+      elixir device_poe.exs 10.0.1.10 on 5-8
+      elixir device_poe.exs 10.0.1.10 on 1,3,5-7
+    """)
   end
 
   defp parse_type(nil), do: :udm_pro

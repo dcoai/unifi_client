@@ -13,6 +13,11 @@ Mix.install([
 
 defmodule ListDevices do
   def run do
+    if help_requested?() do
+      print_help()
+      System.halt(0)
+    end
+
     host = System.get_env("UNIFI_HOST") || raise "UNIFI_HOST environment variable required"
     username = System.get_env("UNIFI_USER") || raise "UNIFI_USER environment variable required"
     password = System.get_env("UNIFI_PASS") || raise "UNIFI_PASS environment variable required"
@@ -56,6 +61,31 @@ defmodule ListDevices do
 
     UnifiClient.Auth.logout(client)
     IO.puts("")
+  end
+
+  defp help_requested? do
+    System.argv() |> Enum.any?(&(&1 in ["-h", "--help"]))
+  end
+
+  defp print_help do
+    IO.puts("""
+    List all UniFi devices
+
+    Usage:
+      elixir device_list.exs
+
+    Environment variables (required):
+      UNIFI_HOST       UniFi controller hostname or IP
+      UNIFI_USER       Username for authentication
+      UNIFI_PASS       Password for authentication
+
+    Environment variables (optional):
+      UNIFI_SITE       Site name (default: "default")
+      UNIFI_TYPE       Controller type: "udm_pro" or "controller" (default: "udm_pro")
+
+    Example:
+      UNIFI_HOST=192.168.1.1 UNIFI_USER=admin UNIFI_PASS=secret elixir device_list.exs
+    """)
   end
 
   defp parse_type(nil), do: :udm_pro
