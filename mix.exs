@@ -1,8 +1,8 @@
 defmodule UnifiClient.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
-  @source_url "https://github.com/yourusername/unifi_client"
+  @version "0.1.1"
+  @source_url "https://github.com/dcoai/unifi_client"
 
   def project do
     [

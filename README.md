@@ -7,12 +7,12 @@ This is the first version it is very raw, some things work, some aren't tested. 
 ## Installation
 
 If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `unifi` to your list of dependencies in `mix.exs`:
+by adding `unifi_client` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:unifi, "~> 0.1.0"}
+    {:unifi_client, "~> 0.1.1"}
   ]
 end
 ```
