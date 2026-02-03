@@ -86,8 +86,11 @@ defmodule UnifiClient.Cloud.Client do
   @spec new!(keyword()) :: t()
   def new!(opts) do
     case new(opts) do
-      {:ok, client} -> client
-      {:error, reason} -> raise ArgumentError, "Invalid cloud client configuration: #{inspect(reason)}"
+      {:ok, client} ->
+        client
+
+      {:error, reason} ->
+        raise ArgumentError, "Invalid cloud client configuration: #{inspect(reason)}"
     end
   end
 

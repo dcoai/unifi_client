@@ -223,7 +223,8 @@ defmodule UnifiClient.API.Devices do
     * `name` - The new name
 
   """
-  @spec set_name(Client.t(), String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, Error.t()}
+  @spec set_name(Client.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Error.t()}
   def set_name(%Client{} = client, site, device_id, name) do
     API.put(client, site_path(client, site, "/rest/device/#{device_id}"), %{
       "name" => name
@@ -233,7 +234,7 @@ defmodule UnifiClient.API.Devices do
   @doc """
   Enables or disables a device port.
 
-  For switches only.
+  For switches only. Preserves existing port settings (VLAN, speed, etc.).
 
   ## Parameters
 
@@ -246,20 +247,15 @@ defmodule UnifiClient.API.Devices do
   @spec set_port_enabled(Client.t(), String.t(), String.t(), pos_integer(), boolean()) ::
           {:ok, map()} | {:error, Error.t()}
   def set_port_enabled(%Client{} = client, site, device_id, port_idx, enabled) do
-    port_overrides = [
-      %{
-        "port_idx" => port_idx,
-        "port_poe_enabled" => enabled
-      }
-    ]
-
-    API.put(client, site_path(client, site, "/rest/device/#{device_id}"), %{
-      "port_overrides" => port_overrides
+    update_port_overrides(client, site, device_id, [port_idx], %{
+      "port_poe_enabled" => enabled
     })
   end
 
   @doc """
   Sets PoE mode for one or more ports on a switch.
+
+  Preserves existing port settings (VLAN, speed, etc.).
 
   ## Parameters
 
@@ -279,14 +275,7 @@ defmodule UnifiClient.API.Devices do
   @spec set_poe_mode(Client.t(), String.t(), String.t(), [pos_integer()], String.t()) ::
           {:ok, map()} | {:error, Error.t()}
   def set_poe_mode(%Client{} = client, site, device_id, port_idxs, poe_mode) do
-    port_overrides =
-      Enum.map(port_idxs, fn port_idx ->
-        %{"port_idx" => port_idx, "poe_mode" => poe_mode}
-      end)
-
-    API.put(client, site_path(client, site, "/rest/device/#{device_id}"), %{
-      "port_overrides" => port_overrides
-    })
+    update_port_overrides(client, site, device_id, port_idxs, %{"poe_mode" => poe_mode})
   end
 
   @doc """
@@ -319,5 +308,42 @@ defmodule UnifiClient.API.Devices do
     mac
     |> String.downcase()
     |> String.replace("-", ":")
+  end
+
+  # Updates port_overrides while preserving existing port settings (VLAN, speed, etc.)
+  defp update_port_overrides(%Client{} = client, site, device_id, port_idxs, new_settings) do
+    # First, get current device configuration
+    case API.get(client, site_path(client, site, "/rest/device/#{device_id}")) do
+      {:ok, device} ->
+        existing_overrides = device["port_overrides"] || []
+
+        # Build updated overrides by merging new settings into existing ones
+        updated_overrides =
+          Enum.map(port_idxs, fn port_idx ->
+            # Find existing override for this port, or create base with just port_idx
+            existing =
+              Enum.find(existing_overrides, %{"port_idx" => port_idx}, fn override ->
+                override["port_idx"] == port_idx
+              end)
+
+            # Merge new settings into existing override
+            Map.merge(existing, new_settings)
+          end)
+
+        # Include unchanged overrides for ports we're not modifying
+        unchanged_overrides =
+          Enum.reject(existing_overrides, fn override ->
+            override["port_idx"] in port_idxs
+          end)
+
+        all_overrides = unchanged_overrides ++ updated_overrides
+
+        API.put(client, site_path(client, site, "/rest/device/#{device_id}"), %{
+          "port_overrides" => all_overrides
+        })
+
+      {:error, _} = error ->
+        error
+    end
   end
 end

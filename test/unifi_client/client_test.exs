@@ -110,12 +110,14 @@ defmodule UnifiClient.ClientTest do
   describe "api_url/2" do
     test "adds prefix for UDM Pro" do
       {:ok, client} = Client.new(host: "192.168.1.1", type: :udm_pro)
+
       assert Client.api_url(client, "/api/s/default/stat/device") ==
                "/proxy/network/api/s/default/stat/device"
     end
 
     test "no prefix for standard controller" do
       {:ok, client} = Client.new(host: "192.168.1.1", type: :controller)
+
       assert Client.api_url(client, "/api/s/default/stat/device") ==
                "/api/s/default/stat/device"
     end
@@ -124,12 +126,14 @@ defmodule UnifiClient.ClientTest do
   describe "site_url/3" do
     test "builds correct site URL for UDM Pro" do
       {:ok, client} = Client.new(host: "192.168.1.1", type: :udm_pro)
+
       assert Client.site_url(client, "default", "/stat/device") ==
                "/proxy/network/api/s/default/stat/device"
     end
 
     test "builds correct site URL for standard controller" do
       {:ok, client} = Client.new(host: "192.168.1.1", type: :controller)
+
       assert Client.site_url(client, "mysite", "/stat/device") ==
                "/api/s/mysite/stat/device"
     end

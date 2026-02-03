@@ -119,7 +119,11 @@ defmodule UnifiClient.API.Sites do
     start = Keyword.get(opts, :start, 0)
 
     params = [_limit: limit, _start: start]
-    API.get_list(client, site_path(client, site, "/stat/event") <> "?" <> URI.encode_query(params))
+
+    API.get_list(
+      client,
+      site_path(client, site, "/stat/event") <> "?" <> URI.encode_query(params)
+    )
   end
 
   @doc """
