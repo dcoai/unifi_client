@@ -54,7 +54,7 @@ defmodule UnifiClient.MixProject do
   defp docs do
     [
       main: "readme",
-      extras: ["README.md"],
+      extras: ["README.md", "spec.md"],
       source_ref: "v#{@version}"
     ]
   end
