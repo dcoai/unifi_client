@@ -21,6 +21,17 @@ defmodule UnifiClient.Response do
   - `"ok"` - Success
   - `"error"` - Error with message in `msg`
 
+  Protect responses have no envelope: a success body is the bare JSON
+  resource and an error body is
+
+      {
+        "error": "message",
+        "name": "NotFound",
+        "statusCode": 404
+      }
+
+  which is recognised on any HTTP status and always yields `{:error, _}`.
+
   """
 
   alias UnifiClient.Error
@@ -33,6 +44,11 @@ defmodule UnifiClient.Response do
   Returns `{:ok, data}` on success or `{:error, error}` on failure.
   """
   @spec parse(Req.Response.t()) :: result()
+  def parse(%Req.Response{body: %{"error" => msg, "name" => _, "statusCode" => code} = body})
+      when is_binary(msg) and is_integer(code) do
+    {:error, Error.api_error(body)}
+  end
+
   def parse(%Req.Response{status: status, body: body}) when status in 200..299 do
     parse_body(body)
   end

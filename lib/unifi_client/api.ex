@@ -17,6 +17,19 @@ defmodule UnifiClient.API do
       # Direct usage for unsupported endpoints
       {:ok, data} = UnifiClient.API.get(client, "/api/s/default/stat/some-endpoint")
 
+  ## Applications
+
+  A UniFi OS console hosts several applications behind one login. Every
+  request function takes an `app:` option selecting which one the path
+  belongs to — `:network` (the default) or `:protect`. The application's
+  prefix (see `UnifiClient.Client.app_prefix/2`) is prepended to the path.
+
+      {:ok, bootstrap} = UnifiClient.API.get(client, "/api/bootstrap", app: :protect)
+
+  Asking for an application the controller type does not host (Protect on a
+  self-hosted `:controller`) returns `{:error, %Error{code: :app_unavailable}}`
+  without making a request.
+
   """
 
   alias UnifiClient.{Client, Response, Error}
@@ -28,7 +41,8 @@ defmodule UnifiClient.API do
 
     * `client` - An authenticated `UnifiClient.Client`
     * `path` - The API path (prefix is added automatically for absolute paths)
-    * `opts` - Additional options passed to `Req.request/2`
+    * `opts` - `app:` (default `:network`); everything else is passed to
+      `Req.request/2`
 
   ## Returns
 
@@ -73,6 +87,25 @@ defmodule UnifiClient.API do
   @spec put(Client.t(), String.t(), map(), keyword()) :: {:ok, term()} | {:error, Error.t()}
   def put(%Client{} = client, path, body \\ %{}, opts \\ []) do
     request(:put, client, path, Keyword.put(opts, :json, body))
+  end
+
+  @doc """
+  Makes a PATCH request to the UniFi API.
+
+  Used for partial updates — the Protect application updates resources
+  with PATCH.
+
+  ## Parameters
+
+    * `client` - An authenticated `UnifiClient.Client`
+    * `path` - The API path
+    * `body` - The request body (will be JSON encoded)
+    * `opts` - Additional options passed to `Req.request/2`
+
+  """
+  @spec patch(Client.t(), String.t(), map(), keyword()) :: {:ok, term()} | {:error, Error.t()}
+  def patch(%Client{} = client, path, body \\ %{}, opts \\ []) do
+    request(:patch, client, path, Keyword.put(opts, :json, body))
   end
 
   @doc """
@@ -151,31 +184,102 @@ defmodule UnifiClient.API do
     end
   end
 
+  @doc """
+  Downloads a binary response body (image, video) to a file or into memory.
+
+  The body is streamed rather than buffered, so exports of hundreds of
+  megabytes do not have to fit in memory. Only a `200` response is written
+  to `dest`; any other status is parsed like every other response and
+  returned as `{:error, error}` — the file is never created, and a file left
+  half-written by a connection failure mid-stream is removed.
+
+  ## Parameters
+
+    * `client` - An authenticated `UnifiClient.Client`
+    * `path` - The API path
+    * `dest` - A file path, or `:memory` to return the body as a binary
+    * `opts` - `app:` (default `:network`); everything else is passed to
+      `Req.request/2`, e.g. `receive_timeout:` for a slow export
+
+  ## Returns
+
+    * `{:ok, dest}` - The file was written (path `dest`)
+    * `{:ok, binary}` - The body, when `dest` is `:memory`
+    * `{:error, error}` - Request failed or the console returned an error
+
+  """
+  @spec download(Client.t(), String.t(), Path.t() | :memory, keyword()) ::
+          {:ok, Path.t() | binary()} | {:error, Error.t()}
+  def download(%Client{} = client, path, dest, opts \\ []) do
+    {app, opts} = Keyword.pop(opts, :app, :network)
+
+    if Client.app_available?(client, app) do
+      do_download(client, build_url(client, app, path), dest, opts)
+    else
+      {:error, Error.app_unavailable(app)}
+    end
+  end
+
   # Private functions
 
   defp request(method, %Client{} = client, path, opts) do
-    url = build_url(client, path)
+    {app, opts} = Keyword.pop(opts, :app, :network)
 
-    case Req.request(client.req, [{:method, method}, {:url, url} | opts]) do
+    if Client.app_available?(client, app) do
+      url = build_url(client, app, path)
+
+      case Req.request(client.req, [{:method, method}, {:url, url} | opts]) do
+        {:ok, response} -> Response.parse(response)
+        {:error, exception} -> {:error, Error.connection_error(exception)}
+      end
+    else
+      {:error, Error.app_unavailable(app)}
+    end
+  end
+
+  # Req collects a streamed body into the collectable only on status 200;
+  # every other status is collected into a plain binary and decoded like a
+  # normal response. That is what keeps error bodies off the disk.
+  defp do_download(client, url, :memory, opts) do
+    case Req.request(client.req, [{:method, :get}, {:url, url} | opts]) do
+      {:ok, %Req.Response{status: 200, body: body}} -> {:ok, body}
       {:ok, response} -> Response.parse(response)
       {:error, exception} -> {:error, Error.connection_error(exception)}
     end
   end
 
-  defp build_url(%Client{} = client, "/" <> _ = path) do
-    # Check if path already has the API prefix to avoid double-prefixing
-    prefix = Client.api_prefix(client)
+  defp do_download(client, url, dest, opts) when is_binary(dest) do
+    req_opts = [{:method, :get}, {:url, url}, {:into, File.stream!(dest)} | opts]
+
+    case Req.request(client.req, req_opts) do
+      {:ok, %Req.Response{status: 200}} ->
+        {:ok, dest}
+
+      {:ok, response} ->
+        Response.parse(response)
+
+      {:error, exception} ->
+        # The collectable may have been opened and partially written before
+        # the connection dropped; a partial download is not a download.
+        _ = File.rm(dest)
+        {:error, Error.connection_error(exception)}
+    end
+  end
+
+  defp build_url(%Client{} = client, app, "/" <> _ = path) do
+    # Check if path already has the selected app's prefix to avoid double-prefixing
+    prefix = Client.app_prefix(client, app)
 
     if prefix != "" and String.starts_with?(path, prefix) do
       # Path already has prefix, use as-is
       path
     else
       # Add prefix
-      Client.api_url(client, path)
+      Client.app_url(client, app, path)
     end
   end
 
-  defp build_url(_client, path) do
+  defp build_url(_client, _app, path) do
     # Relative path - use as-is
     path
   end

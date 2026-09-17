@@ -32,6 +32,7 @@ defmodule UnifiClient.Client do
   alias UnifiClient.CookieJar
 
   @type controller_type :: :udm_pro | :controller
+  @type app :: :network | :protect
   @type t :: %__MODULE__{
           host: String.t(),
           port: pos_integer(),
@@ -134,14 +135,45 @@ defmodule UnifiClient.Client do
   end
 
   @doc """
-  Returns the API path prefix based on controller type.
+  Returns the Network API path prefix based on controller type.
 
   - UDM Pro: `/proxy/network`
   - Standard controller: empty string
+
+  Shorthand for `app_prefix(client, :network)`.
   """
   @spec api_prefix(t()) :: String.t()
-  def api_prefix(%__MODULE__{type: :udm_pro}), do: "/proxy/network"
-  def api_prefix(%__MODULE__{type: :controller}), do: ""
+  def api_prefix(%__MODULE__{} = client), do: app_prefix(client, :network)
+
+  @doc """
+  Returns the path prefix for a UniFi OS application.
+
+  UniFi OS consoles (`:udm_pro`) host each application behind a proxy
+  prefix; the self-hosted Network controller (`:controller`) is the
+  Network application itself and has no prefix.
+
+  | `type`        | `:network`       | `:protect`       |
+  |---------------|------------------|------------------|
+  | `:udm_pro`    | `/proxy/network` | `/proxy/protect` |
+  | `:controller` | `""`             | *(unavailable)*  |
+
+  Raises `FunctionClauseError` for an application the controller type does
+  not host. Check `app_available?/2` first when the app is caller-supplied.
+  """
+  @spec app_prefix(t(), app()) :: String.t()
+  def app_prefix(%__MODULE__{type: :udm_pro}, :network), do: "/proxy/network"
+  def app_prefix(%__MODULE__{type: :udm_pro}, :protect), do: "/proxy/protect"
+  def app_prefix(%__MODULE__{type: :controller}, :network), do: ""
+
+  @doc """
+  Returns whether the controller type hosts the given application.
+
+  Protect exists only on UniFi OS consoles.
+  """
+  @spec app_available?(t(), app()) :: boolean()
+  def app_available?(%__MODULE__{type: :udm_pro}, app) when app in [:network, :protect], do: true
+  def app_available?(%__MODULE__{type: :controller}, :network), do: true
+  def app_available?(%__MODULE__{}, _app), do: false
 
   @doc """
   Returns the login endpoint for the controller type.
@@ -170,9 +202,21 @@ defmodule UnifiClient.Client do
 
   """
   @spec api_url(t(), String.t()) :: String.t()
-  def api_url(%__MODULE__{} = client, path) do
-    prefix = api_prefix(client)
-    "#{prefix}#{path}"
+  def api_url(%__MODULE__{} = client, path), do: app_url(client, :network, path)
+
+  @doc """
+  Builds a URL for a given application and path.
+
+  ## Example
+
+      iex> {:ok, client} = UnifiClient.Client.new(host: "192.168.1.1", type: :udm_pro)
+      iex> UnifiClient.Client.app_url(client, :protect, "/api/bootstrap")
+      "/proxy/protect/api/bootstrap"
+
+  """
+  @spec app_url(t(), app(), String.t()) :: String.t()
+  def app_url(%__MODULE__{} = client, app, path) do
+    app_prefix(client, app) <> path
   end
 
   @doc """

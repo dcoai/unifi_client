@@ -33,6 +33,7 @@ defmodule UnifiClient.MixProject do
 
       # Dev/Test
       {:mox, "~> 1.0", only: :test},
+      {:plug, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end
