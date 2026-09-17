@@ -120,4 +120,54 @@ defmodule UnifiClient.ResponseTest do
       assert {:error, _} = Response.parse_empty(response)
     end
   end
+
+  describe "Protect bodies" do
+    test "a bare success body is returned as-is" do
+      assert {:ok, %{"lastUpdateId" => "x"}} =
+               Response.parse(%Req.Response{status: 200, body: %{"lastUpdateId" => "x"}})
+
+      assert {:ok, [%{"id" => "cam"}]} =
+               Response.parse(%Req.Response{status: 200, body: [%{"id" => "cam"}]})
+    end
+
+    test "an error body is an error on a 4xx" do
+      body = %{"error" => "Camera not found", "name" => "NotFound", "statusCode" => 404}
+
+      assert {:error, %UnifiClient.Error{code: :not_found, message: "Camera not found"} = e} =
+               Response.parse(%Req.Response{status: 404, body: body})
+
+      assert e.reason == %{status: 404, name: "NotFound"}
+    end
+
+    test "an error body is an error even on a 200" do
+      body = %{"error" => "nope", "name" => "Unexpected", "statusCode" => 500}
+
+      assert {:error, %UnifiClient.Error{code: :http_error, message: "nope"}} =
+               Response.parse(%Req.Response{status: 200, body: body})
+    end
+
+    test "401/403 error bodies are authentication errors" do
+      for status <- [401, 403] do
+        body = %{"error" => "denied", "name" => "Unauthorized", "statusCode" => status}
+
+        assert {:error, %UnifiClient.Error{code: :authentication_failed}} =
+                 Response.parse(%Req.Response{status: status, body: body})
+      end
+    end
+
+    test "a map that merely has an error key is not mistaken for the Protect shape" do
+      assert {:ok, %{"error" => 0}} =
+               Response.parse(%Req.Response{status: 200, body: %{"error" => 0}})
+    end
+  end
+
+  describe "Error.connection_error/1" do
+    test "maps a transport timeout to :timeout" do
+      assert %UnifiClient.Error{code: :timeout} =
+               UnifiClient.Error.connection_error(%Req.TransportError{reason: :timeout})
+
+      assert %UnifiClient.Error{code: :connection_error} =
+               UnifiClient.Error.connection_error(%Req.TransportError{reason: :econnrefused})
+    end
+  end
 end

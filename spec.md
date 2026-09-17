@@ -87,8 +87,9 @@ or description. Protect has no sites.
 
 ### 1.5 Testing
 
-- Unit tests use `ExUnit` with `Req.Test`/plug stubs or `Mox`; they never
-  reach a real console.
+- Unit tests use `ExUnit`; HTTP is stubbed with `Req.Test` by passing
+  `plug: {Req.Test, Stub}` through a function's `opts` (which `API` forwards
+  to Req), so no test reaches a real console. `plug` is a test-only dep.
 - Integration behaviour is exercised manually with the scripts in
   `examples/` (§7). A work item that changes console-facing behaviour states
   in its completion note which console and application version it was
@@ -136,9 +137,12 @@ Cloud Key Gen2+). `:controller` is the self-hosted Network application.
 | `new(opts)` | Validates `host` (required, non-empty binary), `type` (one of the two atoms, default `:udm_pro`), `port` (positive integer, defaults by type). Starts a `CookieJar`. Builds `req` with `base_url`, `receive_timeout: timeout`, `connect_options: [transport_opts: [verify: :verify_none]]` unless `verify_ssl: true`, and the CookieJar steps attached. Returns `{:ok, client}` or `{:error, :host_required \| :invalid_host \| :invalid_type \| :invalid_port}`. |
 | `new!(opts)` | `new/1` or raise `ArgumentError`. |
 | `base_url(client)` | `"https://#{host}:#{port}"`. |
-| `api_prefix(client)` | `"/proxy/network"` for `:udm_pro`, `""` for `:controller`. |
+| `api_prefix(client)` | `app_prefix(client, :network)`. |
+| `app_prefix(client, app)` | `:udm_pro`: `"/proxy/network"` / `"/proxy/protect"`; `:controller`: `""` for `:network`, no clause for `:protect` (`FunctionClauseError`). |
+| `app_available?(client, app)` | Whether the controller type hosts `app`: `:controller` hosts only `:network`. |
 | `login_endpoint(client)` / `logout_endpoint(client)` | Per the table above. |
-| `api_url(client, path)` | `api_prefix <> path`. |
+| `api_url(client, path)` | `app_url(client, :network, path)`. |
+| `app_url(client, app, path)` | `app_prefix(client, app) <> path`. |
 | `site_url(client, site, path)` | `api_url(client, "/api/s/#{site}#{path}")`. |
 | `put_csrf_token(client, token)` / `mark_logged_in(client)` / `mark_logged_out(client)` | Struct updates used by `Auth`. `mark_logged_out` also clears `csrf_token`. |
 
@@ -180,19 +184,29 @@ endpoints the library does not wrap.
 | `get(client, path, opts \\ [])` | GET. |
 | `post(client, path, body \\ %{}, opts \\ [])` | POST with `json: body`. |
 | `put(client, path, body \\ %{}, opts \\ [])` | PUT with `json: body`. |
+| `patch(client, path, body \\ %{}, opts \\ [])` | PATCH with `json: body`. |
 | `delete(client, path, opts \\ [])` | DELETE. |
+| `download(client, path, dest, opts \\ [])` | GET streamed to `dest` (a path) → `{:ok, dest}`, or `dest: :memory` → `{:ok, binary}`. See §6.1. |
 | `get_list(client, path, opts \\ [])` | `get/3`, wrapping a map result in a list → always `{:ok, [map()]}`. |
 | `get_one(client, path, opts \\ [])` | `get/3`, taking the first list element; `[]` → `{:error, %Error{code: :not_found}}`. |
 | `command(client, path, body \\ %{})` | `post/4` discarding the body → `:ok`. |
 
-URL rule (`build_url`): a path beginning with `/` gets `Client.api_prefix`
-prepended **unless it already starts with that prefix**; any other path is
-used verbatim. Every result goes through `Response.parse/1`.
+Every function takes `app: :network | :protect` in `opts` (default
+`:network`); the key is consumed, not forwarded to Req. If
+`Client.app_available?/2` is false for the client's type the function returns
+`{:error, %Error{code: :app_unavailable}}` **before any I/O**.
+
+URL rule (`build_url`): a path beginning with `/` gets the selected app's
+prefix prepended **unless it already starts with that prefix**; any other
+path is used verbatim. Every result goes through `Response.parse/1`.
 
 ### 2.5 `UnifiClient.Response`
 
 Parses `%Req.Response{}` for the local console.
 
+0. A body shaped `%{"error" => binary, "name" => _, "statusCode" => integer}`
+   (the Protect error format) → `{:error, Error.api_error(body)}` on **any**
+   status, checked before everything else.
 1. Status 401 → `Error.authentication_error(msg)`; 404 → `Error.not_found()`;
    other non-2xx → `Error.http_error(status, body)`.
 2. 2xx body, by shape:
@@ -217,8 +231,11 @@ no-body cases.
 | `new(message, code \\ nil, reason \\ nil)` | as given | |
 | `authentication_error(msg \\ "Authentication failed")` | `:authentication_failed` | |
 | `not_found(resource \\ "Resource")` | `:not_found` | message `"#{resource} not found"` |
+| `connection_error(%Req.TransportError{reason: :timeout})` | `:timeout` | |
 | `connection_error(reason)` | `:connection_error` | `reason` is the Req exception |
+| `app_unavailable(app)` | `:app_unavailable` | `reason` is the app atom |
 | `api_error(%{"meta" => %{"rc" => rc, "msg" => msg}})` | `String.to_atom(rc)` | Network envelope error |
+| `api_error(%{"error" => msg, "name" => name, "statusCode" => n})` | 401/403 → `:authentication_failed`, 404 → `:not_found`, else `:http_error` | Protect error; `reason` is `%{status:, name:}` |
 | `api_error(other)` | `:unknown` | `reason` is the body |
 | `http_error(status, body \\ nil)` | `:http_error` | `reason` is `%{status:, body:}`; message mapped for 400/401/403/404/500/502/503 |
 
@@ -442,26 +459,29 @@ several endpoints return binary media (JPEG, MP4).
 
 ### 6.1 Core seams
 
-**Status: planned — proposal #1, work item #6.**
+**Status: implemented** (proposal #1, work item #6).
 
 - `Client.app_prefix(client, :network | :protect)` → `/proxy/network` /
-  `/proxy/protect` on `:udm_pro`; `:network` → `""` on `:controller`.
-  `api_prefix/1` becomes `app_prefix(client, :network)`.
-- `API.get/post/put/delete` accept `app: :network | :protect` (default
-  `:network`); `API.patch/4` is added. `build_url` prefixes with the selected
-  app's prefix and does not double-prefix a path that already carries it.
-  Any request with `app: :protect` on a `:controller` client returns
+  `/proxy/protect` on `:udm_pro`; `:network` → `""` on `:controller`;
+  `Client.app_available?/2` says whether a type hosts an app. `api_prefix/1`
+  is `app_prefix(client, :network)`; `app_url/3` is the app-aware `api_url/2`.
+- `API.get/post/put/patch/delete/download` accept `app: :network | :protect`
+  (default `:network`). `build_url` prefixes with the selected app's prefix
+  and does not double-prefix a path that already carries it. Any request
+  with `app: :protect` on a `:controller` client returns
   `{:error, %Error{code: :app_unavailable}}` before any I/O.
-- `Response.parse` recognises the Protect error body (on any status) and
-  returns `{:error, Error.api_error(body)}` carrying the message and
-  `statusCode`.
-- `API.download(client, path, dest, opts)` streams a binary body. Using
-  Req's function-form `into:`, it inspects the status on the first chunk:
-  2xx → open `dest` for binary write, append every chunk, close, return
-  `{:ok, dest}`; non-2xx → buffer the chunks and pass the assembled body to
-  `Response.parse` so the caller receives the ordinary `{:error, _}` and
-  **no file is created**. `dest: :memory` returns `{:ok, binary}`. Honours
-  `app:` and `receive_timeout:`.
+- `Response.parse` recognises the Protect error body on any status and
+  returns `{:error, Error.api_error(body)}` carrying the message, the
+  `statusCode` and the error `name`; the code is mapped from the status so
+  callers match `:authentication_failed` / `:not_found` for either app.
+- `API.download(client, path, dest, opts)` streams a binary body with Req's
+  collectable `into:` (`File.stream!(dest)`). Req collects into the
+  collectable **only for status 200**; any other status is collected into a
+  binary, decoded, and handed to `Response.parse`, so the caller receives the
+  ordinary `{:error, _}` and **the file is never created**. A transport
+  failure mid-stream returns `{:error, _}` and removes the partial file, so
+  `dest` exists iff the result is `{:ok, dest}`. `dest: :memory` returns
+  `{:ok, binary}`. Honours `app:` and `receive_timeout:`.
 - `Error` gains `:app_unavailable` and `:timeout` (a Req transport timeout
   maps to `:timeout` rather than a generic `:connection_error`).
 

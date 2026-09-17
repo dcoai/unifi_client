@@ -166,4 +166,41 @@ defmodule UnifiClient.ClientTest do
       assert client.csrf_token == nil
     end
   end
+
+  describe "applications" do
+    test "app_prefix/2 per app and controller type" do
+      {:ok, udm} = Client.new(host: "h", type: :udm_pro)
+      {:ok, ctl} = Client.new(host: "h", type: :controller)
+
+      assert Client.app_prefix(udm, :network) == "/proxy/network"
+      assert Client.app_prefix(udm, :protect) == "/proxy/protect"
+      assert Client.app_prefix(ctl, :network) == ""
+
+      assert_raise FunctionClauseError, fn -> Client.app_prefix(ctl, :protect) end
+    end
+
+    test "api_prefix/1 is the Network prefix" do
+      {:ok, udm} = Client.new(host: "h", type: :udm_pro)
+      {:ok, ctl} = Client.new(host: "h", type: :controller)
+      assert Client.api_prefix(udm) == Client.app_prefix(udm, :network)
+      assert Client.api_prefix(ctl) == Client.app_prefix(ctl, :network)
+    end
+
+    test "app_available?/2" do
+      {:ok, udm} = Client.new(host: "h", type: :udm_pro)
+      {:ok, ctl} = Client.new(host: "h", type: :controller)
+
+      assert Client.app_available?(udm, :network)
+      assert Client.app_available?(udm, :protect)
+      assert Client.app_available?(ctl, :network)
+      refute Client.app_available?(ctl, :protect)
+      refute Client.app_available?(udm, :talk)
+    end
+
+    test "app_url/3 prepends the app prefix" do
+      {:ok, udm} = Client.new(host: "h", type: :udm_pro)
+      assert Client.app_url(udm, :protect, "/api/bootstrap") == "/proxy/protect/api/bootstrap"
+      assert Client.app_url(udm, :network, "/api/self") == Client.api_url(udm, "/api/self")
+    end
+  end
 end
