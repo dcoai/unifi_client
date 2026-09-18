@@ -27,7 +27,8 @@ examples
 ├── device_list.exs
 ├── device_poe.exs
 ├── list_sites.exs
-└── protect_cameras.exs
+├── protect_cameras.exs
+└── protect_export.exs
 ```
 
 each script needs config information specified as environment variables, they can be run like:
@@ -61,7 +62,27 @@ UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret \
   elixir examples/protect_cameras.exs --snapshot <camera-id> --out porch.jpg
 ```
 
-Events and recorded-video export are in progress; see `spec.md` §6.
+Recorded video is exported as MP4, streamed straight to disk. The console
+renders the clip on demand, so the call waits roughly as long as the clip is
+long (the timeout is derived from the window; pass `timeout:` to override):
+
+```elixir
+start = ~U[2026-09-17 08:00:00Z]
+finish = DateTime.add(start, 60, :second)
+{:ok, "porch.mp4"} = UnifiClient.Protect.Video.export(client, porch["id"], start, finish, "porch.mp4")
+
+# recent motion events and their thumbnails
+{:ok, events} = UnifiClient.Protect.Events.list(client, start: start, types: ["motion"])
+{:ok, jpeg} = UnifiClient.Protect.Events.thumbnail(client, hd(events)["id"])
+```
+
+```bash
+UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret \
+  elixir examples/protect_export.exs --camera <camera-id> \
+    --start 2026-09-17T08:00:00Z --end 2026-09-17T08:01:00Z --out porch.mp4
+```
+
+Live event streaming over Protect's WebSocket is planned; see `spec.md` §6.3.
 
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
 and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
