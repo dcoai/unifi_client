@@ -1,6 +1,6 @@
 defmodule UnifiClient do
   @moduledoc """
-  An Elixir client for the UniFi Network Controller API.
+  An Elixir client for UniFi Network and UniFi Protect.
 
   This library provides a comprehensive interface for managing UniFi network
   infrastructure including access points, switches, gateways, and connected clients.
@@ -11,6 +11,7 @@ defmodule UnifiClient do
   - **UniFi Cloud Support** - Manage sites via unifi.ui.com with API keys
   - **Real-time Events** - WebSocket integration for live updates
   - **Full API Coverage** - Devices, clients, networks, firewall, statistics
+  - **UniFi Protect** - Cameras, snapshots, events, video export, live updates
 
   ## Quick Start
 
@@ -88,6 +89,8 @@ defmodule UnifiClient do
   - `UnifiClient.Protect.Cameras` - Cameras and snapshots
   - `UnifiClient.Protect.Events` - Motion/smart-detect events, thumbnails, heatmaps
   - `UnifiClient.Protect.Video` - Recorded video export to MP4
+  - `UnifiClient.Protect.WebSocket` - Live updates over the binary WebSocket
+  - `UnifiClient.Protect.Frame` - Packet decoder for that stream
   - `UnifiClient.Protect.Time` - Epoch-millisecond conversion
 
   ### Cloud Modules

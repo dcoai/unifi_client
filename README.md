@@ -28,6 +28,7 @@ examples
 ├── device_poe.exs
 ├── list_sites.exs
 ├── protect_cameras.exs
+├── protect_events.exs
 └── protect_export.exs
 ```
 
@@ -82,7 +83,22 @@ UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret \
     --start 2026-09-17T08:00:00Z --end 2026-09-17T08:01:00Z --out porch.mp4
 ```
 
-Live event streaming over Protect's WebSocket is planned; see `spec.md` §6.3.
+Live updates arrive over Protect's binary WebSocket as
+`{:unifi_protect_event, %{action: action, data: data}}` messages; the
+subscription resumes from `lastUpdateId` across reconnects so nothing repeats:
+
+```elixir
+{:ok, _ws} = UnifiClient.Protect.WebSocket.start_link(client: client, subscriber: self())
+
+receive do
+  {:unifi_protect_event, %{action: %{"modelKey" => "camera", "id" => id}, data: %{"isMotionDetected" => true}}} ->
+    IO.puts("motion on #{id}")
+end
+```
+
+```bash
+UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret elixir examples/protect_events.exs
+```
 
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
 and published on [HexDocs](https://hexdocs.pm). Once published, the docs can

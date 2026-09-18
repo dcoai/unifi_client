@@ -40,7 +40,7 @@ defmodule UnifiClient.MixProject do
 
   defp description do
     """
-    An Elixir client for the UniFi Network Controller API.
+    An Elixir client for UniFi Network and UniFi Protect.
     Supports UDM Pro, UniFi OS consoles, and UniFi Cloud.
     """
   end
