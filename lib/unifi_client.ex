@@ -87,6 +87,7 @@ defmodule UnifiClient do
   - `UnifiClient.Protect` - Bootstrap and NVR
   - `UnifiClient.Protect.Cameras` - Cameras and snapshots
   - `UnifiClient.Protect.Events` - Motion/smart-detect events, thumbnails, heatmaps
+  - `UnifiClient.Protect.Video` - Recorded video export to MP4
   - `UnifiClient.Protect.Time` - Epoch-millisecond conversion
 
   ### Cloud Modules

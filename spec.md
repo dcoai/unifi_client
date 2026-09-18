@@ -82,7 +82,7 @@ UnifiClient.Cloud.*         Site Manager (api.ui.com)
 UnifiClient.Protect         bootstrap / nvr (§6.2)
 UnifiClient.Protect.API     Protect request helpers (internal)
 UnifiClient.Protect.Time    DateTime ⇄ epoch-ms
-UnifiClient.Protect.*       Cameras, Events (§6.2); Video, WebSocket planned
+UnifiClient.Protect.*       Cameras, Events, Video (§6.2); WebSocket planned (§6.3)
 ```
 
 A "site" argument is the Network site *name* (`"default"`), not its `_id`
@@ -490,9 +490,7 @@ several endpoints return binary media (JPEG, MP4).
 
 ### 6.2 REST API
 
-**Status: partially implemented — proposal #2.** `Protect`, `Protect.API`,
-`Protect.Time`, `Protect.Cameras` (work item #8) and `Protect.Events` (#9)
-are implemented; `Protect.Video` (#10) is planned.
+**Status: implemented** (proposal #2; work items #8, #9, #10).
 
 Namespace `UnifiClient.Protect`, base path `/proxy/protect/api`. Same
 conventions as §1: raw maps, `{:ok, _} | {:error, %Error{}}`. Every function
@@ -517,16 +515,20 @@ when none remain.
 | `Protect.Events.list(client, opts)` | implemented | GET `/api/events?start=&end=&types=&limit=` — `start:`, `end:` (DateTime or ms), `types:` (list joined with commas: `"motion"`, `"smartDetectZone"`, `"ring"`, …; `[]` ≡ absent), `limit:`; only given keys sent | `{:ok, [event]}` |
 | `Protect.Events.thumbnail(client, event_id, opts)` | implemented | GET `/api/events/:id/thumbnail` — `dest:` (default `:memory`) | `{:ok, jpeg_binary}` or path |
 | `Protect.Events.heatmap(client, event_id, opts)` | implemented | GET `/api/events/:id/heatmap` — `dest:` (default `:memory`) | `{:ok, png_binary}` or path |
-| `Protect.Video.export(client, camera_id, start, end_, dest, opts \\ [])` | planned #10 | GET `/api/video/export?camera=&start=&end=&type=&filename=` streamed to `dest` via `API.download/4` — `type:` `:rotating` (default) or `:timelapse`, `timeout:` | `{:ok, dest}` |
+| `Protect.Video.export(client, camera_id, start, end_, dest, opts \\ [])` | implemented | GET `/api/video/export?camera=&start=&end=&type=&filename=` streamed to `dest` via `API.download/4` — `type:` `:rotating` (default) or `:timelapse`, `filename:` (default `Path.basename(dest)`, `"export.mp4"` for `:memory`), `timeout:`; `end_ <= start` → `{:error, %Error{code: :invalid_window}}` before any request | `{:ok, dest}` or `{:ok, mp4_binary}` |
+| `Protect.Video.export_timeout(client, start, end_, opts \\ [])` | implemented | pure | ms — see below |
 
 `export` timeout: the console transcodes on demand, so the wait scales with
-clip length. The default is derived — `max(client.timeout, clip_seconds ×
-factor)` with `factor` a documented module attribute — and `timeout:` is an
-explicit override. A timeout surfaces as `{:error, %Error{code: :timeout}}`.
+clip length. `export_timeout/4` derives it — `max(client.timeout, clip_ms ×
+@seconds_per_clip_second)` with the factor (2) a commented module attribute —
+and `timeout:` is an explicit override. It is passed as Req's
+`receive_timeout`; a timeout surfaces as `{:error, %Error{code: :timeout}}`
+with no file left behind (§6.1).
 
 Examples: `examples/protect_cameras.exs` (list, `--snapshot ID --out FILE
-[--width PX]`; implemented) and `examples/protect_export.exs` (`--camera
---start --end --out`; planned #10).
+[--width PX]`) and `examples/protect_export.exs` (`--camera --start --end
+--out [--type]`; ISO 8601 times with zone; prints the derived timeout before
+starting and the byte count and elapsed time after).
 
 ### 6.3 Event WebSocket
 
@@ -568,7 +570,7 @@ specification depends on them.
 
 ## 7. Examples and packaging
 
-**Status: implemented** (Network examples); Protect examples arrive with §6.
+**Status: implemented.**
 
 ### 7.1 Examples
 
@@ -588,6 +590,7 @@ Scripts in `examples/` are runnable with `elixir examples/<name>.exs`. Each:
 | `client_list.exs` | `API.Clients.list_active/2` |
 | `device_poe.exs` | `API.Devices.set_poe_mode/5` |
 | `protect_cameras.exs` | `Protect.Cameras.list/2`, `snapshot/3` — Protect needs no `UNIFI_SITE`/`UNIFI_TYPE` |
+| `protect_export.exs` | `Protect.Video.export/6`, `export_timeout/4` |
 
 ### 7.2 Packaging
 
