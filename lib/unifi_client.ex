@@ -82,6 +82,12 @@ defmodule UnifiClient do
   - `UnifiClient.API.Firewall` - Firewall rules and port forwarding
   - `UnifiClient.API.Statistics` - Traffic stats and DPI data
 
+  ### Protect Modules
+
+  - `UnifiClient.Protect` - Bootstrap and NVR
+  - `UnifiClient.Protect.Cameras` - Cameras and snapshots
+  - `UnifiClient.Protect.Time` - Epoch-millisecond conversion
+
   ### Cloud Modules
 
   - `UnifiClient.Cloud.Client` - Cloud API client with API key auth
