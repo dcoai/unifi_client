@@ -79,7 +79,10 @@ UnifiClient.Response        Network envelope parsing (internal)
 UnifiClient.Error           the error struct and constructors
 UnifiClient.WebSocket.*     Network event stream
 UnifiClient.Cloud.*         Site Manager (api.ui.com)
-UnifiClient.Protect.*       Protect endpoints and event stream (planned, §6)
+UnifiClient.Protect         bootstrap / nvr (§6.2)
+UnifiClient.Protect.API     Protect request helpers (internal)
+UnifiClient.Protect.Time    DateTime ⇄ epoch-ms
+UnifiClient.Protect.*       Cameras (§6.2); Events, Video, WebSocket planned
 ```
 
 A "site" argument is the Network site *name* (`"default"`), not its `_id`
@@ -487,31 +490,43 @@ several endpoints return binary media (JPEG, MP4).
 
 ### 6.2 REST API
 
-**Status: planned — proposal #2.** Namespace `UnifiClient.Protect`, base
-path `/proxy/protect/api`. Same conventions as §1: raw maps,
-`{:ok, _} | {:error, %Error{}}`. Time arguments accept `DateTime.t()` or an
-integer of epoch milliseconds.
+**Status: partially implemented — proposal #2.** `Protect`, `Protect.API`,
+`Protect.Time` and `Protect.Cameras` are implemented (work item #8);
+`Protect.Events` (#9) and `Protect.Video` (#10) are planned.
 
-| Module.function | Request | Returns |
-|---|---|---|
-| `Protect.bootstrap(client)` | GET `/api/bootstrap` | `{:ok, map}` — `nvr`, `cameras`, `users`, `lastUpdateId`, … |
-| `Protect.nvr(client)` | GET `/api/nvr` | `{:ok, map}` |
-| `Protect.Cameras.list(client)` | GET `/api/cameras` | `{:ok, [camera]}` |
-| `Protect.Cameras.get(client, id)` | GET `/api/cameras/:id` | `{:ok, camera}` |
-| `Protect.Cameras.update(client, id, params)` | PATCH `/api/cameras/:id` | `{:ok, camera}` |
-| `Protect.Cameras.snapshot(client, id, opts)` | GET `/api/cameras/:id/snapshot?ts=&w=&h=` — `ts:`, `w:`, `h:`, `dest:` (default `:memory`) | `{:ok, jpeg_binary}` or `{:ok, path}` |
-| `Protect.Events.list(client, opts)` | GET `/api/events?start=&end=&types=&limit=` — `start:`, `end:`, `types:` (list, joined with commas: `"motion"`, `"smartDetectZone"`, `"ring"`, …), `limit:` | `{:ok, [event]}` |
-| `Protect.Events.thumbnail(client, event_id, opts)` | GET `/api/events/:id/thumbnail` | `{:ok, jpeg_binary}` or path |
-| `Protect.Events.heatmap(client, event_id, opts)` | GET `/api/events/:id/heatmap` | `{:ok, png_binary}` or path |
-| `Protect.Video.export(client, camera_id, start, end_, dest, opts \\ [])` | GET `/api/video/export?camera=&start=&end=&type=&filename=` streamed to `dest` via `API.download/4` — `type:` `:rotating` (default) or `:timelapse`, `timeout:` | `{:ok, dest}` |
+Namespace `UnifiClient.Protect`, base path `/proxy/protect/api`. Same
+conventions as §1: raw maps, `{:ok, _} | {:error, %Error{}}`. Every function
+takes a trailing `opts` keyword list; the keys it documents are consumed and
+the rest go to `Req.request/2`. Time arguments accept `DateTime.t()` or an
+integer of epoch milliseconds, normalised by `Protect.Time.to_ms/1`.
+
+`UnifiClient.Protect.API` (internal, `@moduledoc false`) is the one place
+that sets `app: :protect`: `get/3`, `post/4`, `patch/4`, `download/4`, and
+`with_query/2`, which appends only the non-`nil` params and omits the `?`
+when none remain.
+
+| Module.function | Status | Request | Returns |
+|---|---|---|---|
+| `Protect.bootstrap(client, opts)` | implemented | GET `/api/bootstrap` | `{:ok, map}` — `nvr`, `cameras`, `users`, `lastUpdateId`, … |
+| `Protect.nvr(client, opts)` | implemented | GET `/api/nvr` | `{:ok, map}` |
+| `Protect.Time.to_ms(dt_or_ms)` / `to_ms_or_nil/1` | implemented | — | epoch ms; negative integers are a `FunctionClauseError` |
+| `Protect.Cameras.list(client, opts)` | implemented | GET `/api/cameras` | `{:ok, [camera]}` |
+| `Protect.Cameras.get(client, id, opts)` | implemented | GET `/api/cameras/:id` | `{:ok, camera}` |
+| `Protect.Cameras.update(client, id, params, opts)` | implemented | PATCH `/api/cameras/:id` with `params` verbatim | `{:ok, camera}` |
+| `Protect.Cameras.snapshot(client, id, opts)` | implemented | GET `/api/cameras/:id/snapshot?ts=&w=&h=` — `ts:`, `w:`, `h:` sent only when given; `dest:` (default `:memory`) | `{:ok, jpeg_binary}` or `{:ok, path}` |
+| `Protect.Events.list(client, opts)` | planned #9 | GET `/api/events?start=&end=&types=&limit=` — `start:`, `end:`, `types:` (list, joined with commas: `"motion"`, `"smartDetectZone"`, `"ring"`, …), `limit:` | `{:ok, [event]}` |
+| `Protect.Events.thumbnail(client, event_id, opts)` | planned #9 | GET `/api/events/:id/thumbnail` | `{:ok, jpeg_binary}` or path |
+| `Protect.Events.heatmap(client, event_id, opts)` | planned #9 | GET `/api/events/:id/heatmap` | `{:ok, png_binary}` or path |
+| `Protect.Video.export(client, camera_id, start, end_, dest, opts \\ [])` | planned #10 | GET `/api/video/export?camera=&start=&end=&type=&filename=` streamed to `dest` via `API.download/4` — `type:` `:rotating` (default) or `:timelapse`, `timeout:` | `{:ok, dest}` |
 
 `export` timeout: the console transcodes on demand, so the wait scales with
 clip length. The default is derived — `max(client.timeout, clip_seconds ×
 factor)` with `factor` a documented module attribute — and `timeout:` is an
 explicit override. A timeout surfaces as `{:error, %Error{code: :timeout}}`.
 
-Examples: `examples/protect_cameras.exs` (list, snapshot to file) and
-`examples/protect_export.exs` (`--camera --start --end --out`).
+Examples: `examples/protect_cameras.exs` (list, `--snapshot ID --out FILE
+[--width PX]`; implemented) and `examples/protect_export.exs` (`--camera
+--start --end --out`; planned #10).
 
 ### 6.3 Event WebSocket
 
@@ -572,6 +587,7 @@ Scripts in `examples/` are runnable with `elixir examples/<name>.exs`. Each:
 | `device_list.exs` | `API.Devices.list/2` |
 | `client_list.exs` | `API.Clients.list_active/2` |
 | `device_poe.exs` | `API.Devices.set_poe_mode/5` |
+| `protect_cameras.exs` | `Protect.Cameras.list/2`, `snapshot/3` — Protect needs no `UNIFI_SITE`/`UNIFI_TYPE` |
 
 ### 7.2 Packaging
 
