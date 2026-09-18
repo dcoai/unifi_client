@@ -82,7 +82,7 @@ UnifiClient.Cloud.*         Site Manager (api.ui.com)
 UnifiClient.Protect         bootstrap / nvr (§6.2)
 UnifiClient.Protect.API     Protect request helpers (internal)
 UnifiClient.Protect.Time    DateTime ⇄ epoch-ms
-UnifiClient.Protect.*       Cameras, Events, Video (§6.2); WebSocket planned (§6.3)
+UnifiClient.Protect.*       Cameras, Events, Video (§6.2); Frame (§6.3); WebSocket planned
 ```
 
 A "site" argument is the Network site *name* (`"default"`), not its `_id`
@@ -532,29 +532,46 @@ starting and the byte count and elapsed time after).
 
 ### 6.3 Event WebSocket
 
-**Status: planned — proposal #3.**
+**Status: partially implemented — proposal #3.** The `Protect.Frame`
+decoder (work item #11) is implemented; the `Protect.WebSocket` client
+(#12) is planned.
 
 `UnifiClient.Protect.WebSocket` connects to
 `wss://#{host}:#{port}/proxy/protect/ws/updates?lastUpdateId=#{id}` with the
 same cookie/SSL handling as §4.1. `lastUpdateId` comes from
 `Protect.bootstrap/1` unless `last_update_id:` is given.
 
-Frames are **binary**. `UnifiClient.Protect.Frame.decode/1` parses one
-packet:
+Frames are **binary**. `UnifiClient.Protect.Frame.decode/1` (implemented)
+parses one packet:
 
 ```
 <<type::8, format::8, deflated::8, _::8, size::32-big, payload::binary-size(size), rest::binary>>
 ```
 
-`format` 1 = JSON (decoded), 2 = UTF-8 string, 3 = raw buffer; `deflated == 1`
-means the payload is zlib-compressed and is inflated first. `decode/1`
-returns `{:ok, term, rest} | {:error, reason}` and is total over binaries —
-malformed input is an error value, never an exception.
+into `%Frame{type: :action | :payload | {:unknown, n}, format: :json | :utf8
+| :buffer | {:unknown, n}, payload: term}` and returns
+`{:ok, %Frame{}, rest} | {:error, reason}`. `type` 1 = action, 2 = payload;
+`format` 1 = JSON (decoded with Jason), 2 = UTF-8 string, 3 = raw buffer;
+`deflated == 1` means the payload is zlib-compressed and is inflated first.
+Unknown type/format numbers are surfaced as `{:unknown, n}`, not rejected.
+
+`decode/1` is total over binaries — malformed input is an error value,
+never an exception. Incompleteness is distinguished from corruption so a
+streaming caller can buffer on the former and discard on the latter:
+`:incomplete_header` (fewer than 8 bytes), `{:incomplete_payload, needed,
+have}`; `:bad_deflate`, `{:invalid_json, reason}`. Because every Erlang
+`zlib` inflate raises on corrupt data and no error-returning variant
+exists, inflation runs in a monitored throwaway process and a crash maps
+to `:bad_deflate` — process isolation instead of `rescue`. The crashed
+process's emulator report is the loud signal for a corrupt packet.
 
 Each Protect message is two packets, an **action** (`%{"action" => "add" |
 "update" | "remove", "modelKey" => _, "id" => _, "newUpdateId" => _}`)
-followed by its **data**. The client pairs them and sends subscribers
-`{:unifi_protect_event, %{action: action, data: data}}`. `newUpdateId` is
+followed by its **data**. `Frame.decode_message/1` (implemented) pairs
+them — the first must be `:action`/`:json`, the second `:payload`, else
+`{:error, {:unexpected_sequence, %{got:, want:}}}` — returning
+`{:ok, %{action: map, data: term}, rest}`. The client (planned) sends
+subscribers `{:unifi_protect_event, %{action: action, data: data}}`. `newUpdateId` is
 tracked so a reconnect resumes from the last delivered update instead of
 replaying. Subscribe/unsubscribe/stop and reconnect policy mirror §4.1.
 
