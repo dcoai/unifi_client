@@ -82,7 +82,7 @@ UnifiClient.Cloud.*         Site Manager (api.ui.com)
 UnifiClient.Protect         bootstrap / nvr (§6.2)
 UnifiClient.Protect.API     Protect request helpers (internal)
 UnifiClient.Protect.Time    DateTime ⇄ epoch-ms
-UnifiClient.Protect.*       Cameras, Events, Video (§6.2); Frame (§6.3); WebSocket planned
+UnifiClient.Protect.*       Cameras, Events, Video (§6.2); Frame, WebSocket (§6.3)
 ```
 
 A "site" argument is the Network site *name* (`"default"`), not its `_id`
@@ -532,14 +532,35 @@ starting and the byte count and elapsed time after).
 
 ### 6.3 Event WebSocket
 
-**Status: partially implemented — proposal #3.** The `Protect.Frame`
-decoder (work item #11) is implemented; the `Protect.WebSocket` client
-(#12) is planned.
+**Status: implemented** (proposal #3; work items #11, #12).
 
-`UnifiClient.Protect.WebSocket` connects to
-`wss://#{host}:#{port}/proxy/protect/ws/updates?lastUpdateId=#{id}` with the
-same cookie/SSL handling as §4.1. `lastUpdateId` comes from
-`Protect.bootstrap/1` unless `last_update_id:` is given.
+`UnifiClient.Protect.WebSocket` is a `WebSockex` process connected to
+`wss://#{host}:#{port}/proxy/protect/ws/updates?lastUpdateId=#{id}`
+(`build_url/2`) with the same cookie/SSL handling as §4.1.
+
+| Function | Behaviour |
+|---|---|
+| `start_link(client:, last_update_id: \\ nil, bootstrap_opts: \\ [], subscriber: \\ self(), name: nil)` | With `last_update_id` given, connects directly; otherwise calls `Protect.bootstrap/2` and uses its `"lastUpdateId"` — a bootstrap failure is returned as `{:error, %Error{}}` (`:app_unavailable` on a `:controller`, `:no_update_id` if the document lacks the cursor) before any socket is opened. |
+| `subscribe/2`, `unsubscribe/2`, `stop/1` | As §4.1; subscribers are monitored. |
+| `build_url(client, last_update_id)` | Pure. |
+| `handle_binary(data, state)` | Pure: `{messages, state}` — see below. |
+
+Frame handling: `{:binary, data}` is appended to `state.buffer` and
+`Frame.decode_message/1` is applied repeatedly. Each message is delivered
+to every subscriber as `{:unifi_protect_event, %{action: action, data:
+data}}` in arrival order and advances `state.last_update_id` to the
+action's `"newUpdateId"` (an action without one keeps the cursor). An
+*incomplete* result leaves the unconsumed bytes in the buffer for the next
+frame (Protect splits and coalesces packets across WebSocket frames); a
+*corrupt* result logs a warning and empties the buffer — a stream cannot be
+resynchronised mid-packet, so any message that shared the frame is lost
+with it. `{:text, _}` frames are logged at `debug` and ignored; `:ping` is
+answered.
+
+Reconnect: 5 s between attempts, 10 attempts, then the process stays up
+without reconnecting (as §4.1) — but each attempt rebuilds the connection
+(`WebSockex.Conn.new`) from `build_url/2` with the *current* cursor and an
+empty buffer, so nothing already delivered is replayed.
 
 Frames are **binary**. `UnifiClient.Protect.Frame.decode/1` (implemented)
 parses one packet:
@@ -570,12 +591,13 @@ Each Protect message is two packets, an **action** (`%{"action" => "add" |
 followed by its **data**. `Frame.decode_message/1` (implemented) pairs
 them — the first must be `:action`/`:json`, the second `:payload`, else
 `{:error, {:unexpected_sequence, %{got:, want:}}}` — returning
-`{:ok, %{action: map, data: term}, rest}`. The client (planned) sends
-subscribers `{:unifi_protect_event, %{action: action, data: data}}`. `newUpdateId` is
-tracked so a reconnect resumes from the last delivered update instead of
-replaying. Subscribe/unsubscribe/stop and reconnect policy mirror §4.1.
+`{:ok, %{action: map, data: term}, rest}`. The client's `handle_binary/2`
+(above) drives it.
 
-Example: `examples/protect_events.exs`.
+Example: `examples/protect_events.exs` — prints one line per update
+(model, action, camera name, changed keys, cursor) and a `motion started /
+ended` line for camera `isMotionDetected` changes; `--resume <id>` passes
+`last_update_id:`.
 
 ### 6.4 Not in scope (yet)
 
@@ -608,6 +630,7 @@ Scripts in `examples/` are runnable with `elixir examples/<name>.exs`. Each:
 | `device_poe.exs` | `API.Devices.set_poe_mode/5` |
 | `protect_cameras.exs` | `Protect.Cameras.list/2`, `snapshot/3` — Protect needs no `UNIFI_SITE`/`UNIFI_TYPE` |
 | `protect_export.exs` | `Protect.Video.export/6`, `export_timeout/4` |
+| `protect_events.exs` | `Protect.WebSocket.start_link/1` (`--resume <lastUpdateId>`) |
 
 ### 7.2 Packaging
 
