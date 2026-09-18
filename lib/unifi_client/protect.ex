@@ -19,6 +19,7 @@ defmodule UnifiClient.Protect do
   ## Modules
 
   - `UnifiClient.Protect.Cameras` — list, inspect, update, snapshot
+  - `UnifiClient.Protect.Events` — motion / smart-detect / ring events, thumbnails, heatmaps
   - `UnifiClient.Protect.Time` — `DateTime` ⇄ epoch-millisecond conversion
 
   Responses are the console's raw JSON as maps with string keys; see
