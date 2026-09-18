@@ -82,7 +82,7 @@ UnifiClient.Cloud.*         Site Manager (api.ui.com)
 UnifiClient.Protect         bootstrap / nvr (§6.2)
 UnifiClient.Protect.API     Protect request helpers (internal)
 UnifiClient.Protect.Time    DateTime ⇄ epoch-ms
-UnifiClient.Protect.*       Cameras (§6.2); Events, Video, WebSocket planned
+UnifiClient.Protect.*       Cameras, Events (§6.2); Video, WebSocket planned
 ```
 
 A "site" argument is the Network site *name* (`"default"`), not its `_id`
@@ -491,8 +491,8 @@ several endpoints return binary media (JPEG, MP4).
 ### 6.2 REST API
 
 **Status: partially implemented — proposal #2.** `Protect`, `Protect.API`,
-`Protect.Time` and `Protect.Cameras` are implemented (work item #8);
-`Protect.Events` (#9) and `Protect.Video` (#10) are planned.
+`Protect.Time`, `Protect.Cameras` (work item #8) and `Protect.Events` (#9)
+are implemented; `Protect.Video` (#10) is planned.
 
 Namespace `UnifiClient.Protect`, base path `/proxy/protect/api`. Same
 conventions as §1: raw maps, `{:ok, _} | {:error, %Error{}}`. Every function
@@ -514,9 +514,9 @@ when none remain.
 | `Protect.Cameras.get(client, id, opts)` | implemented | GET `/api/cameras/:id` | `{:ok, camera}` |
 | `Protect.Cameras.update(client, id, params, opts)` | implemented | PATCH `/api/cameras/:id` with `params` verbatim | `{:ok, camera}` |
 | `Protect.Cameras.snapshot(client, id, opts)` | implemented | GET `/api/cameras/:id/snapshot?ts=&w=&h=` — `ts:`, `w:`, `h:` sent only when given; `dest:` (default `:memory`) | `{:ok, jpeg_binary}` or `{:ok, path}` |
-| `Protect.Events.list(client, opts)` | planned #9 | GET `/api/events?start=&end=&types=&limit=` — `start:`, `end:`, `types:` (list, joined with commas: `"motion"`, `"smartDetectZone"`, `"ring"`, …), `limit:` | `{:ok, [event]}` |
-| `Protect.Events.thumbnail(client, event_id, opts)` | planned #9 | GET `/api/events/:id/thumbnail` | `{:ok, jpeg_binary}` or path |
-| `Protect.Events.heatmap(client, event_id, opts)` | planned #9 | GET `/api/events/:id/heatmap` | `{:ok, png_binary}` or path |
+| `Protect.Events.list(client, opts)` | implemented | GET `/api/events?start=&end=&types=&limit=` — `start:`, `end:` (DateTime or ms), `types:` (list joined with commas: `"motion"`, `"smartDetectZone"`, `"ring"`, …; `[]` ≡ absent), `limit:`; only given keys sent | `{:ok, [event]}` |
+| `Protect.Events.thumbnail(client, event_id, opts)` | implemented | GET `/api/events/:id/thumbnail` — `dest:` (default `:memory`) | `{:ok, jpeg_binary}` or path |
+| `Protect.Events.heatmap(client, event_id, opts)` | implemented | GET `/api/events/:id/heatmap` — `dest:` (default `:memory`) | `{:ok, png_binary}` or path |
 | `Protect.Video.export(client, camera_id, start, end_, dest, opts \\ [])` | planned #10 | GET `/api/video/export?camera=&start=&end=&type=&filename=` streamed to `dest` via `API.download/4` — `type:` `:rotating` (default) or `:timelapse`, `timeout:` | `{:ok, dest}` |
 
 `export` timeout: the console transcodes on demand, so the wait scales with
