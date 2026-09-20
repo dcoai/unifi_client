@@ -172,7 +172,7 @@ renewal and tests.
 | Function | Behaviour |
 |---|---|
 | `start_link(opts \\ [])` | Starts the agent. |
-| `get_cookies(jar)` / `put_cookies(jar, [set_cookie_header])` | Stored as the raw `Set-Cookie` header strings. |
+| `get_cookies(jar)` / `put_cookies(jar, [set_cookie_header])` | Stored as the raw `Set-Cookie` header strings. `put_cookies` also derives the CSRF token when the cookies carry one: a `csrf_token=` cookie's value (self-hosted controller), or the `csrfToken` claim of the JWT in a `TOKEN=` cookie (UniFi OS). Anything else leaves the stored token alone; a malformed JWT is simply no token. |
 | `get_csrf_token(jar)` / `put_csrf_token(jar, token)` | |
 | `clear(jar)` | Drops cookies and token (generation and lock untouched). |
 | `generation(jar)` | Incremented by each successful `renew/3`. |
@@ -182,8 +182,10 @@ renewal and tests.
 Request step: sends `cookie: name=value; name=value` built from the stored
 headers (everything after the first `;` of each stored string is dropped),
 and sends `x-csrf-token` on **POST, PUT, DELETE and PATCH** when a token is
-held. Response step: stores every `set-cookie` header and the
-`x-csrf-token` header if present.
+held. Response step: stores every `set-cookie` header (deriving a token from
+them as above), then the `x-csrf-token` header if present — so the header,
+the console's most explicit statement, wins over a cookie-derived token
+from the same response.
 
 ### 2.4 `UnifiClient.API`
 
@@ -680,5 +682,6 @@ Scripts in `examples/` are runnable with `elixir examples/<name>.exs`. Each:
 - Hex package `unifi_client`, MIT, Elixir `~> 1.15`.
 - Runtime deps: `req ~> 0.5`, `jason ~> 1.4`, `websockex ~> 0.4`.
 - `UnifiClient.version/0` returns the package version string and must match
-  `@version` in `mix.exs`.
+  `@version` in `mix.exs` (the test asserts against `Mix.Project.config()`,
+  not a literal).
 - ExDoc `extras` include `README.md` and this `spec.md`.
