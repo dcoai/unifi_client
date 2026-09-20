@@ -85,4 +85,95 @@ defmodule UnifiClient.CookieJarTest do
       assert Keyword.has_key?(attached.response_steps, :unifi_save_cookies)
     end
   end
+
+  describe "renew/3 (single-flight)" do
+    @moduletag :capture_log
+
+    defp counting_login(counter, result_fun) do
+      fn ->
+        Agent.update(counter, &(&1 + 1))
+        # Make the window in which others can pile up wide enough to matter.
+        Process.sleep(50)
+        result_fun.()
+      end
+    end
+
+    test "six concurrent callers produce exactly one login" do
+      {:ok, jar} = CookieJar.start_link()
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+      login = counting_login(counter, fn -> {:ok, :session} end)
+
+      results =
+        1..6
+        |> Task.async_stream(fn _ -> CookieJar.renew(jar, 0, login) end, max_concurrency: 6)
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      # One login; everyone who waited for it is told :renewed, anyone who
+      # arrived after it completed is told :already_renewed.
+      assert Agent.get(counter, & &1) == 1
+      assert Enum.all?(results, &(&1 in [{:ok, :renewed}, {:ok, :already_renewed}]))
+      assert CookieJar.generation(jar) == 1
+    end
+
+    test "a caller that saw the current generation does not log in again" do
+      {:ok, jar} = CookieJar.start_link()
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+      login = counting_login(counter, fn -> {:ok, :session} end)
+
+      assert {:ok, :renewed} = CookieJar.renew(jar, 0, login)
+      assert {:ok, :already_renewed} = CookieJar.renew(jar, 0, login)
+      assert {:ok, :renewed} = CookieJar.renew(jar, 1, login)
+      assert Agent.get(counter, & &1) == 2
+      assert CookieJar.generation(jar) == 2
+    end
+
+    test "a login failure reaches the owner and every waiter; generation unchanged" do
+      {:ok, jar} = CookieJar.start_link()
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+      login = counting_login(counter, fn -> {:error, :bad_password} end)
+
+      results =
+        1..4
+        |> Task.async_stream(fn _ -> CookieJar.renew(jar, 0, login) end, max_concurrency: 4)
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      assert results == List.duplicate({:error, :bad_password}, 4)
+      assert Agent.get(counter, & &1) == 1
+      assert CookieJar.generation(jar) == 0
+
+      # and the lock is released: a later caller logs in again
+      assert {:error, :bad_password} = CookieJar.renew(jar, 0, login)
+      assert Agent.get(counter, & &1) == 2
+    end
+
+    test "an owner that dies mid-login hands the lock to a waiter" do
+      {:ok, jar} = CookieJar.start_link()
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+      test = self()
+
+      # First caller: takes the lock, then is killed while "logging in".
+      owner =
+        spawn(fn ->
+          CookieJar.renew(jar, 0, fn ->
+            send(test, :owner_inside_login)
+            Process.sleep(:infinity)
+          end)
+        end)
+
+      assert_receive :owner_inside_login
+
+      waiter =
+        Task.async(fn ->
+          CookieJar.renew(jar, 0, counting_login(counter, fn -> {:ok, :session} end))
+        end)
+
+      # Give the waiter time to register, then kill the owner.
+      Process.sleep(30)
+      Process.exit(owner, :kill)
+
+      assert {:ok, :renewed} = Task.await(waiter, 1_000)
+      assert Agent.get(counter, & &1) == 1
+      assert CookieJar.generation(jar) == 1
+    end
+  end
 end

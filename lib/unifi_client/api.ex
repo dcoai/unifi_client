@@ -44,9 +44,16 @@ defmodule UnifiClient.API do
   Pass `reauth: false` to observe a `401` instead (e.g. a health check).
   A long-running process therefore never needs to handle expiry itself.
 
+  Renewal is **single-flight** per client: when many concurrent requests hit
+  an expired session, exactly one login happens and the rest reuse it
+  (`UnifiClient.CookieJar.renew/3`). This matters because UniFi OS
+  rate-limits logins — a handful in a few minutes answers `429`
+  (`:rate_limited`) for a while. For the same reason, log in once and keep
+  the client; never log in per request.
+
   """
 
-  alias UnifiClient.{Auth, Client, Response, Error}
+  alias UnifiClient.{Auth, Client, CookieJar, Response, Error}
 
   @doc """
   Makes a GET request to the UniFi API.
@@ -291,10 +298,14 @@ defmodule UnifiClient.API do
   end
 
   defp do_run(client, req_opts, reauth?) do
+    # Captured before the request: if the session is renewed by someone
+    # else while this request is in flight, a 401 here just means "retry".
+    seen = if reauth?, do: CookieJar.generation(client.cookie_jar), else: 0
+
     case Req.request(client.req, req_opts) do
       {:ok, %Req.Response{status: 401}} when reauth? ->
-        case Auth.login(client) do
-          {:ok, _renewed} -> do_run(client, req_opts, false)
+        case CookieJar.renew(client.cookie_jar, seen, fn -> Auth.login(client) end) do
+          {:ok, _renewed_or_already} -> do_run(client, req_opts, false)
           {:error, %Error{} = error} -> {:error, error}
         end
 

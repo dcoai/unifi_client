@@ -403,4 +403,121 @@ defmodule UnifiClient.APITest do
       assert_received {:hit, "/api/login", 1, _}
     end
   end
+
+  describe "single-flight renewal and rate limiting" do
+    defp counting_stub(test_pid, on_get) do
+      {:ok, counter} = Agent.start_link(fn -> %{} end)
+
+      fn conn ->
+        n =
+          Agent.get_and_update(counter, fn m ->
+            {Map.get(m, conn.request_path, 0) + 1, Map.update(m, conn.request_path, 1, &(&1 + 1))}
+          end)
+
+        send(test_pid, {:hit, conn.request_path, n})
+
+        case conn.request_path do
+          "/api/auth/login" ->
+            # slow enough that the other five requests are already waiting
+            Process.sleep(50)
+
+            conn
+            |> Plug.Conn.put_resp_header("set-cookie", "TOKEN=renewed; Path=/")
+            |> Req.Test.json(%{"unique_id" => "u"})
+
+          _ ->
+            on_get.(conn, n)
+        end
+      end
+    end
+
+    test "six concurrent requests on an expired session log in exactly once" do
+      client = logged_in_client()
+      test = self()
+
+      Req.Test.stub(
+        @stub,
+        counting_stub(test, fn conn, _n ->
+          # expired until the renewed cookie arrives
+          case Plug.Conn.get_req_header(conn, "cookie") do
+            ["TOKEN=renewed"] ->
+              Req.Test.json(conn, %{"meta" => %{"rc" => "ok"}, "data" => [%{"ok" => true}]})
+
+            _ ->
+              conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"error" => "expired"})
+          end
+        end)
+      )
+
+      results =
+        1..6
+        |> Task.async_stream(fn _ -> API.get(client, "/api/x") end, max_concurrency: 6)
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      assert Enum.all?(results, &match?({:ok, [%{"ok" => true}]}, &1)), inspect(results)
+      assert_received {:hit, "/api/auth/login", 1}
+      refute_received {:hit, "/api/auth/login", 2}
+    end
+
+    test "a 429 is :rate_limited with retry_after from the header" do
+      # retry: false — Req's default retries a GET 429 and honours Retry-After.
+      {:ok, client} =
+        Client.new(host: "udm.local", req_options: [plug: {Req.Test, @stub}, retry: false])
+
+      Req.Test.stub(@stub, fn conn ->
+        conn
+        |> Plug.Conn.put_status(429)
+        |> Plug.Conn.put_resp_header("retry-after", "30")
+        |> Req.Test.json(%{
+          "code" => "AUTHENTICATION_FAILED_LIMIT_REACHED",
+          "message" => "You've reached the login attempt limit"
+        })
+      end)
+
+      assert {:error,
+              %Error{
+                code: :rate_limited,
+                message: "You've reached the login attempt limit",
+                reason: reason
+              }} =
+               API.get(client, "/api/x")
+
+      assert reason.retry_after == 30
+      assert reason.status == 429
+    end
+
+    test "the UniFi OS limit body is :rate_limited even without a 429 status" do
+      {:ok, client} = Client.new(host: "udm.local", req_options: [plug: {Req.Test, @stub}])
+
+      Req.Test.stub(@stub, fn conn ->
+        Req.Test.json(conn, %{"code" => "AUTHENTICATION_FAILED_LIMIT_REACHED"})
+      end)
+
+      assert {:error, %Error{code: :rate_limited, reason: %{retry_after: nil}}} =
+               API.get(client, "/api/x")
+    end
+
+    test "a rate-limited login during renewal is returned and not retried" do
+      client = logged_in_client()
+      test = self()
+
+      Req.Test.stub(
+        @stub,
+        scripted(
+          %{
+            {"/proxy/network/api/x", 1} => &unauthorized/1,
+            {"/api/auth/login", 1} => fn conn ->
+              conn
+              |> Plug.Conn.put_status(429)
+              |> Req.Test.json(%{"code" => "AUTHENTICATION_FAILED_LIMIT_REACHED"})
+            end
+          },
+          test
+        )
+      )
+
+      assert {:error, %Error{code: :rate_limited}} = API.get(client, "/api/x")
+      refute_received {:hit, "/proxy/network/api/x", 2, _}
+    end
+  end
 end

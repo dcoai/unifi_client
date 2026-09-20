@@ -16,6 +16,9 @@ defmodule UnifiClient.Error do
     * `:timeout` - The console did not answer within the request timeout
     * `:app_unavailable` - The controller type does not host the requested
       application (e.g. Protect on a self-hosted Network controller)
+    * `:rate_limited` - The console is throttling (HTTP 429, or UniFi OS's
+      `AUTHENTICATION_FAILED_LIMIT_REACHED` after too many logins);
+      `reason.retry_after` is the `Retry-After` header in seconds when sent
     * `:error` - Generic API error from controller
 
   ## Error Handling
@@ -109,6 +112,25 @@ defmodule UnifiClient.Error do
   @spec app_unavailable(atom()) :: t()
   def app_unavailable(app) do
     new("Application #{app} is not available on this controller type", :app_unavailable, app)
+  end
+
+  @doc """
+  Creates a rate-limit error.
+
+  UniFi OS answers `429` after a handful of logins in a few minutes — for
+  successful logins too — with the body
+  `%{"code" => "AUTHENTICATION_FAILED_LIMIT_REACHED"}`. `retry_after` is the
+  `Retry-After` header in seconds, or `nil`.
+  """
+  @spec rate_limited(term(), non_neg_integer() | nil) :: t()
+  def rate_limited(body, retry_after \\ nil) do
+    message =
+      case body do
+        %{"message" => msg} when is_binary(msg) -> msg
+        _ -> "Rate limited by the console"
+      end
+
+    new(message, :rate_limited, %{status: 429, body: body, retry_after: retry_after})
   end
 
   @doc """

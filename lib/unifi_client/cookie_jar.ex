@@ -29,7 +29,108 @@ defmodule UnifiClient.CookieJar do
   """
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts \\ []) do
-    Agent.start_link(fn -> %{cookies: [], csrf_token: nil} end, opts)
+    Agent.start_link(&initial_state/0, opts)
+  end
+
+  defp initial_state, do: %{cookies: [], csrf_token: nil, generation: 0, renewal: nil}
+
+  @doc """
+  The session generation: incremented by every successful `renew/3`.
+
+  A caller records it before a request; if the request fails with a 401 and
+  the generation has moved on, someone else already renewed the session and
+  the caller only needs to retry.
+  """
+  @spec generation(pid()) :: non_neg_integer()
+  def generation(jar), do: Agent.get(jar, & &1.generation)
+
+  @doc """
+  Renews the session at most once per expiry, however many callers ask.
+
+  `seen` is the generation the caller observed before its failed request.
+  If the jar has moved past it, `{:ok, :already_renewed}` — retry with the
+  cookies already in the jar. Otherwise the first caller becomes the owner
+  and runs `login_fun` **in its own process** (the request steps talk to
+  this agent, so the login cannot run inside it), then releases: a success
+  bumps the generation and every waiter gets `{:ok, :renewed}`; a failure
+  is returned to the owner and every waiter, and the generation is
+  unchanged. Waiters monitor the owner; if it dies mid-login the next one
+  takes the lock.
+
+  UniFi OS rate-limits logins (HTTP 429 after a handful in a few minutes),
+  which is why N concurrent callers must produce one login, not N.
+  """
+  @spec renew(pid(), non_neg_integer(), (-> {:ok, term()} | {:error, term()})) ::
+          {:ok, :renewed | :already_renewed} | {:error, term()}
+  def renew(jar, seen, login_fun) when is_function(login_fun, 0) do
+    me = self()
+    ref = make_ref()
+
+    decision =
+      Agent.get_and_update(jar, fn
+        %{generation: gen} = state when gen > seen ->
+          {:already_renewed, state}
+
+        %{renewal: nil} = state ->
+          {:owner, %{state | renewal: %{owner: me, waiters: []}}}
+
+        %{renewal: %{owner: owner, waiters: waiters} = renewal} = state ->
+          {{:wait, owner}, %{state | renewal: %{renewal | waiters: [{me, ref} | waiters]}}}
+      end)
+
+    case decision do
+      :already_renewed ->
+        {:ok, :already_renewed}
+
+      :owner ->
+        result = login_fun.()
+        release(jar, result)
+
+        case result do
+          {:ok, _} -> {:ok, :renewed}
+          {:error, _} = error -> error
+        end
+
+      {:wait, owner} ->
+        monitor = Process.monitor(owner)
+
+        receive do
+          {:renewal, ^ref, result} ->
+            Process.demonitor(monitor, [:flush])
+            result
+
+          {:DOWN, ^monitor, :process, ^owner, _reason} ->
+            # The owner died before releasing; the lock is cleared below by
+            # whoever notices first, then we compete again.
+            Agent.update(jar, fn
+              %{renewal: %{owner: ^owner}} = state -> %{state | renewal: nil}
+              state -> state
+            end)
+
+            renew(jar, seen, login_fun)
+        end
+    end
+  end
+
+  defp release(jar, result) do
+    waiters =
+      Agent.get_and_update(jar, fn %{renewal: %{waiters: waiters}} = state ->
+        state =
+          case result do
+            {:ok, _} -> %{state | generation: state.generation + 1, renewal: nil}
+            {:error, _} -> %{state | renewal: nil}
+          end
+
+        {waiters, state}
+      end)
+
+    reply =
+      case result do
+        {:ok, _} -> {:ok, :renewed}
+        {:error, _} = error -> error
+      end
+
+    Enum.each(waiters, fn {pid, ref} -> send(pid, {:renewal, ref, reply}) end)
   end
 
   @doc """
@@ -73,7 +174,7 @@ defmodule UnifiClient.CookieJar do
   """
   @spec clear(pid()) :: :ok
   def clear(jar) do
-    Agent.update(jar, fn _state -> %{cookies: [], csrf_token: nil} end)
+    Agent.update(jar, fn state -> %{state | cookies: [], csrf_token: nil} end)
   end
 
   @doc """
