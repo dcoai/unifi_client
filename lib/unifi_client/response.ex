@@ -49,6 +49,16 @@ defmodule UnifiClient.Response do
     {:error, Error.api_error(body)}
   end
 
+  def parse(%Req.Response{status: 429, body: body} = response) do
+    {:error, Error.rate_limited(body, retry_after(response))}
+  end
+
+  def parse(
+        %Req.Response{body: %{"code" => "AUTHENTICATION_FAILED_LIMIT_REACHED"} = body} = response
+      ) do
+    {:error, Error.rate_limited(body, retry_after(response))}
+  end
+
   def parse(%Req.Response{status: status, body: body}) when status in 200..299 do
     parse_body(body)
   end
@@ -129,6 +139,20 @@ defmodule UnifiClient.Response do
 
   defp parse_body(nil) do
     {:ok, nil}
+  end
+
+  @doc false
+  def retry_after(%Req.Response{} = response) do
+    case Req.Response.get_header(response, "retry-after") do
+      [value | _] ->
+        case Integer.parse(value) do
+          {seconds, _} when seconds >= 0 -> seconds
+          _ -> nil
+        end
+
+      [] ->
+        nil
+    end
   end
 
   defp extract_message(%{"meta" => %{"msg" => msg}}), do: msg

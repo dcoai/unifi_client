@@ -185,6 +185,10 @@ defmodule UnifiClient.Auth do
     Error.authentication_error(msg)
   end
 
+  defp parse_login_error(%Req.Response{status: 429, body: body} = response) do
+    Error.rate_limited(body, Response.retry_after(response))
+  end
+
   defp parse_login_error(%Req.Response{status: status, body: body}) do
     Error.http_error(status, body)
   end

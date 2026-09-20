@@ -164,15 +164,19 @@ Cloud Key Gen2+). `:controller` is the self-hosted Network application.
 
 ### 2.3 `UnifiClient.CookieJar`
 
-An `Agent` holding `%{cookies: [String.t()], csrf_token: String.t() | nil}`.
-Internal, but public functions exist for the WebSocket client and tests.
+An `Agent` holding `%{cookies: [String.t()], csrf_token: String.t() | nil,
+generation: non_neg_integer(), renewal: nil | %{owner: pid, waiters: [...]}}`.
+Internal, but public functions exist for the WebSocket client, `API`'s
+renewal and tests.
 
 | Function | Behaviour |
 |---|---|
 | `start_link(opts \\ [])` | Starts the agent. |
 | `get_cookies(jar)` / `put_cookies(jar, [set_cookie_header])` | Stored as the raw `Set-Cookie` header strings. |
 | `get_csrf_token(jar)` / `put_csrf_token(jar, token)` | |
-| `clear(jar)` | Drops cookies and token. |
+| `clear(jar)` | Drops cookies and token (generation and lock untouched). |
+| `generation(jar)` | Incremented by each successful `renew/3`. |
+| `renew(jar, seen, login_fun)` | **Single-flight renewal.** If `generation > seen` → `{:ok, :already_renewed}`. Otherwise the first caller takes the lock and runs `login_fun` *in its own process* (the request steps call the agent, so the login cannot run inside it); later callers wait, monitoring the owner. On `{:ok, _}` the generation is bumped and the owner and every waiter get `{:ok, :renewed}`; on `{:error, e}` all get `{:error, e}` and the generation is unchanged. If the owner dies mid-login a waiter clears the lock and takes over. |
 | `attach(req, jar)` | Prepends request step `unifi_add_cookies` and appends response step `unifi_save_cookies`. |
 
 Request step: sends `cookie: name=value; name=value` built from the stored
@@ -206,11 +210,20 @@ Every function takes `app: :network | :protect` in `opts` (default
 **Session renewal.** Every function also takes `reauth:` (default `true`,
 consumed). When a request answers HTTP `401` and the client *can log in by
 itself* — `logged_in` is true and `username`/`password` are binaries on the
-struct — the function calls `Auth.login/2` **once** and re-issues the same
-request; the retried request's `401` is returned as the authentication
+struct — the function renews the session through
+`CookieJar.renew(jar, seen, fn -> Auth.login(client) end)`, where `seen` is
+the jar's generation read *before* the request, and re-issues the same
+request once; the retried request's `401` is returned as the authentication
 error, and a login failure is returned as its own `%Error{}` without a
-retry. The login endpoint is therefore hit at most once per call and never
-for a client without credentials or with `reauth: false`. The renewed
+retry. Renewal is **single-flight per client**: N concurrent requests that
+hit an expired session cause one login, and a request whose failure
+post-dates a renewal by someone else simply retries. The login endpoint is
+therefore hit at most once per expiry, never for a client without
+credentials or with `reauth: false`, and never after a `:rate_limited`
+answer. This exists because UniFi OS rate-limits logins: a handful within a
+few minutes — successful ones included — answers `429
+AUTHENTICATION_FAILED_LIMIT_REACHED` for a while (observed 2026-09-20 on
+UniFi OS 5.1.33). Consumers log in once and keep the client. The renewed
 cookies and CSRF token land in the shared `CookieJar`, so the retry and
 every later request through any copy of the struct use them; the struct's
 own `csrf_token` field is informational and is not refreshed. For
@@ -228,7 +241,8 @@ Parses `%Req.Response{}` for the local console.
 
 0. A body shaped `%{"error" => binary, "name" => _, "statusCode" => integer}`
    (the Protect error format) → `{:error, Error.api_error(body)}` on **any**
-   status, checked before everything else.
+   status, checked before everything else. Then status 429, or a body with
+   `"code" => "AUTHENTICATION_FAILED_LIMIT_REACHED"`, → `Error.rate_limited/2`.
 1. Status 401 → `Error.authentication_error(msg)`; 404 → `Error.not_found()`;
    other non-2xx → `Error.http_error(status, body)`.
 2. 2xx body, by shape:
@@ -256,6 +270,7 @@ no-body cases.
 | `connection_error(%Req.TransportError{reason: :timeout})` | `:timeout` | |
 | `connection_error(reason)` | `:connection_error` | `reason` is the Req exception |
 | `app_unavailable(app)` | `:app_unavailable` | `reason` is the app atom |
+| `rate_limited(body, retry_after \\ nil)` | `:rate_limited` | HTTP 429, or the UniFi OS body `code: "AUTHENTICATION_FAILED_LIMIT_REACHED"` on any status; `reason` is `%{status: 429, body:, retry_after: seconds \| nil}` from the `Retry-After` header. Also produced by `Auth.login/2` on a 429. |
 | `api_error(%{"meta" => %{"rc" => rc, "msg" => msg}})` | `String.to_atom(rc)` | Network envelope error |
 | `api_error(%{"error" => msg, "name" => name, "statusCode" => n})` | 401/403 → `:authentication_failed`, 404 → `:not_found`, else `:http_error` | Protect error; `reason` is `%{status:, name:}` |
 | `api_error(other)` | `:unknown` | `reason` is the body |
