@@ -49,6 +49,24 @@ defmodule UnifiClient.Protect.Cameras do
   end
 
   @doc """
+  The stream channels of a camera map from `list/2` or `get/3`.
+
+  Protect keeps up to three encodings per camera; each entry carries
+  `"id"` (0 high, 1 medium, 2 low), `"width"`, `"height"`, `"fps"`,
+  `"enabled"` and the RTSP fields. Pass the `"id"` as `channel:` to
+  `UnifiClient.Protect.Video.export/6`. Pure; an empty list when absent.
+
+      iex> UnifiClient.Protect.Cameras.channels(%{"channels" => [%{"id" => 0, "width" => 3840}]})
+      [%{"id" => 0, "width" => 3840}]
+      iex> UnifiClient.Protect.Cameras.channels(%{"id" => "c1"})
+      []
+
+  """
+  @spec channels(map()) :: [map()]
+  def channels(%{"channels" => channels}) when is_list(channels), do: channels
+  def channels(camera) when is_map(camera), do: []
+
+  @doc """
   Fetches a JPEG snapshot from a camera.
 
   ## Options

@@ -154,5 +154,181 @@ defmodule UnifiClient.Protect.VideoTest do
     test "is unavailable on a :controller", %{controller: c} do
       assert {:error, %Error{code: :app_unavailable}} = Video.export(c, "cam1", 0, 1_000, :memory)
     end
+
+    test "channel: and fps: are sent only when given", %{udm: udm, plug: plug} do
+      Req.Test.stub(@stub, fn conn ->
+        q = URI.decode_query(conn.query_string)
+        send(self(), {:query, q})
+        mp4(conn)
+      end)
+
+      assert {:ok, _} = Video.export(udm, "cam1", 0, 1_000, :memory, plug)
+      assert_received {:query, q}
+      refute Map.has_key?(q, "channel")
+      refute Map.has_key?(q, "fps")
+
+      assert {:ok, _} =
+               Video.export(
+                 udm,
+                 "cam1",
+                 0,
+                 1_000,
+                 :memory,
+                 [channel: 1, type: :timelapse, fps: 5] ++ plug
+               )
+
+      assert_received {:query, %{"channel" => "1", "type" => "timelapse", "fps" => "5"}}
+    end
+  end
+
+  describe "export_many/6" do
+    # Stub that answers per camera id: "missing" → Protect 404, anything else → MP4.
+    defp per_camera_stub do
+      fn conn ->
+        case URI.decode_query(conn.query_string)["camera"] do
+          "missing" ->
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{
+              "error" => "No recordings",
+              "name" => "NotFound",
+              "statusCode" => 404
+            })
+
+          _ ->
+            mp4(conn)
+        end
+      end
+    end
+
+    @tag :tmp_dir
+    test "one file per camera, per-camera errors, input order", %{
+      udm: udm,
+      plug: plug,
+      tmp_dir: dir
+    } do
+      Req.Test.stub(@stub, per_camera_stub())
+      out = Path.join(dir, "batch")
+
+      assert {:ok, results} = Video.export_many(udm, ["a", "missing", "b"], 0, 1_000, out, plug)
+
+      assert [
+               {"a", {:ok, a_path}},
+               {"missing", {:error, %Error{code: :not_found}}},
+               {"b", {:ok, b_path}}
+             ] = results
+
+      assert a_path == Path.join(out, "a.mp4")
+      assert b_path == Path.join(out, "b.mp4")
+      assert File.ls!(out) |> Enum.sort() == ["a.mp4", "b.mp4"]
+    end
+
+    @tag :tmp_dir
+    test "dest: fun overrides the layout; other opts reach export/6", %{
+      udm: udm,
+      plug: plug,
+      tmp_dir: dir
+    } do
+      Req.Test.stub(@stub, fn conn ->
+        assert URI.decode_query(conn.query_string)["channel"] == "2"
+        mp4(conn)
+      end)
+
+      dest = fn id -> Path.join(dir, "cam-#{id}-low.mp4") end
+
+      assert {:ok, [{"x", {:ok, path}}]} =
+               Video.export_many(udm, ["x"], 0, 1_000, dir, [dest: dest, channel: 2] ++ plug)
+
+      assert path == Path.join(dir, "cam-x-low.mp4")
+      assert File.exists?(path)
+    end
+
+    @tag :tmp_dir
+    test "max_concurrency bounds the exports in flight", %{udm: udm, plug: plug, tmp_dir: dir} do
+      {:ok, gauge} = Agent.start_link(fn -> %{now: 0, peak: 0} end)
+
+      Req.Test.stub(@stub, fn conn ->
+        Agent.update(gauge, fn %{now: n, peak: p} -> %{now: n + 1, peak: max(p, n + 1)} end)
+        Process.sleep(40)
+        Agent.update(gauge, fn s -> %{s | now: s.now - 1} end)
+        mp4(conn)
+      end)
+
+      ids = ["1", "2", "3", "4"]
+
+      assert {:ok, _} = Video.export_many(udm, ids, 0, 1_000, dir, [max_concurrency: 1] ++ plug)
+      assert Agent.get(gauge, & &1.peak) == 1
+
+      Agent.update(gauge, fn _ -> %{now: 0, peak: 0} end)
+      assert {:ok, _} = Video.export_many(udm, ids, 0, 1_000, dir, [max_concurrency: 4] ++ plug)
+      assert Agent.get(gauge, & &1.peak) == 4
+    end
+
+    @tag :tmp_dir
+    test "batch-level errors make no request", %{udm: udm, controller: c, tmp_dir: dir} do
+      Req.Test.stub(@stub, fn _conn -> flunk("no request expected") end)
+      plug = [plug: {Req.Test, @stub}]
+
+      assert {:error, %Error{code: :invalid_window}} =
+               Video.export_many(udm, ["a"], 5_000, 1_000, dir, plug)
+
+      assert {:error, %Error{code: :app_unavailable}} =
+               Video.export_many(c, ["a"], 0, 1_000, dir, plug)
+
+      # a regular file where the directory should be
+      blocked = Path.join(dir, "file")
+      File.write!(blocked, "x")
+
+      assert {:error, %Error{code: :dir_error}} =
+               Video.export_many(udm, ["a"], 0, 1_000, Path.join(blocked, "sub"), plug)
+    end
+
+    @tag :tmp_dir
+    test "killing the caller kills every in-flight export (cancel contract)", %{
+      udm: udm,
+      tmp_dir: dir
+    } do
+      test = self()
+
+      # Each export blocks inside the stub until released, and reports its pid.
+      Req.Test.stub(@stub, fn conn ->
+        send(test, {:in_flight, self()})
+
+        receive do
+          :release -> mp4(conn)
+        end
+      end)
+
+      {:ok, caller} =
+        Task.start(fn ->
+          Video.export_many(udm, ["a", "b", "c"], 0, 1_000, dir,
+            max_concurrency: 3,
+            plug: {Req.Test, @stub}
+          )
+        end)
+
+      exports =
+        for _ <- 1..3 do
+          assert_receive {:in_flight, pid}, 1_000
+          Process.monitor(pid)
+          pid
+        end
+
+      Process.exit(caller, :kill)
+
+      for pid <- exports do
+        assert_receive {:DOWN, _, :process, ^pid, _}, 1_000
+      end
+
+      refute Enum.any?(exports, &Process.alive?/1)
+    end
+  end
+
+  describe "Cameras.channels/1" do
+    test "returns the channel list or []" do
+      chans = [%{"id" => 0, "width" => 3840}, %{"id" => 2, "width" => 640}]
+      assert UnifiClient.Protect.Cameras.channels(%{"id" => "c", "channels" => chans}) == chans
+      assert UnifiClient.Protect.Cameras.channels(%{"id" => "c"}) == []
+    end
   end
 end
