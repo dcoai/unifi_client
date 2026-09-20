@@ -60,7 +60,15 @@ defmodule ProtectExport do
       UnifiClient.Client.new(host: host, username: username, password: password, verify_ssl: false)
 
     IO.puts("Logging in...")
-    {:ok, client} = UnifiClient.Auth.login(client)
+    client =
+      case UnifiClient.Auth.login(client) do
+        {:ok, client} ->
+          client
+
+        {:error, error} ->
+          IO.puts("Login failed: #{error.message}")
+          System.halt(1)
+      end
 
     clip_s = DateTime.diff(finish, start, :second)
     timeout_ms = UnifiClient.Protect.Video.export_timeout(client, start, finish)

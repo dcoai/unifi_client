@@ -36,10 +36,27 @@ defmodule ProtectEvents do
       UnifiClient.Client.new(host: host, username: username, password: password, verify_ssl: false)
 
     IO.puts("Logging in...")
-    {:ok, client} = UnifiClient.Auth.login(client)
+    client =
+      case UnifiClient.Auth.login(client) do
+        {:ok, client} ->
+          client
+
+        {:error, error} ->
+          IO.puts("Login failed: #{error.message}")
+          System.halt(1)
+      end
 
     # Camera names make the stream readable; ids are what the events carry.
-    {:ok, cameras} = UnifiClient.Protect.Cameras.list(client)
+    cameras =
+      case UnifiClient.Protect.Cameras.list(client) do
+        {:ok, cameras} ->
+          cameras
+
+        {:error, error} ->
+          IO.puts("Listing cameras failed: #{error.message}")
+          UnifiClient.Auth.logout(client)
+          System.halt(1)
+      end
     names = Map.new(cameras, fn cam -> {cam["id"], cam["name"] || cam["id"]} end)
 
     ws_opts = [client: client, subscriber: self()]

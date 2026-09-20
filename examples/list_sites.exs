@@ -7,7 +7,7 @@
 #   UNIFI_TYPE - controller type: "udm_pro" or "controller" (default: "udm_pro")
 
 Mix.install([
-  {:unifi_client, path: "../unifi"}
+  {:unifi_client, path: Path.expand("..", __DIR__)}
 ])
 
 defmodule ListSites do
@@ -33,7 +33,15 @@ defmodule ListSites do
     )
 
     IO.puts("Logging in...")
-    {:ok, client} = UnifiClient.Auth.login(client)
+    client =
+      case UnifiClient.Auth.login(client) do
+        {:ok, client} ->
+          client
+
+        {:error, error} ->
+          IO.puts("Login failed: #{error.message}")
+          System.halt(1)
+      end
 
     IO.puts("Fetching sites...\n")
 
