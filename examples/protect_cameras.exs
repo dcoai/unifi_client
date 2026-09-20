@@ -37,7 +37,15 @@ defmodule ProtectCameras do
       UnifiClient.Client.new(host: host, username: username, password: password, verify_ssl: false)
 
     IO.puts("Logging in...")
-    {:ok, client} = UnifiClient.Auth.login(client)
+    client =
+      case UnifiClient.Auth.login(client) do
+        {:ok, client} ->
+          client
+
+        {:error, error} ->
+          IO.puts("Login failed: #{error.message}")
+          System.halt(1)
+      end
 
     case UnifiClient.Protect.Cameras.list(client) do
       {:ok, cameras} ->

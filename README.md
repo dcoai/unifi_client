@@ -1,5 +1,7 @@
 # UnifiClient
 
+[![pipeline](https://gitlab.conet.yarina.org/dco-tek/unifi_client/badges/main/pipeline.svg)](https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/pipelines)
+
 This is an Elixir client for Unifi Networks
 
 This is the first version it is very raw, some things work, some aren't tested.  It is a work in progress.
@@ -38,7 +40,10 @@ each script needs config information specified as environment variables, they ca
 UNIFI_HOST=udmpro.my_net UNIFI_USER=admin UNIFI_PASS=secret elixir examples/device_list.exs
 ```
 
-all the scripts will take a `-h` or `--help` option to give a brief help message.
+all the scripts will take a `-h` or `--help` option to give a brief help message,
+and they run from any directory (the library is resolved relative to the script).
+A console that cannot be reached, or a login that is refused, prints the reason
+and exits 1.
 
 ## UniFi Protect
 

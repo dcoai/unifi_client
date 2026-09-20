@@ -14,7 +14,7 @@
 #   UNIFI_TYPE - controller type: "udm_pro" or "controller" (default: "udm_pro")
 
 Mix.install([
-  {:unifi_client, path: "../unifi"}
+  {:unifi_client, path: Path.expand("..", __DIR__)}
 ])
 
 defmodule DevicePoe do
@@ -43,10 +43,27 @@ defmodule DevicePoe do
     )
 
     IO.puts("Logging in...")
-    {:ok, client} = UnifiClient.Auth.login(client)
+    client =
+      case UnifiClient.Auth.login(client) do
+        {:ok, client} ->
+          client
+
+        {:error, error} ->
+          IO.puts("Login failed: #{error.message}")
+          System.halt(1)
+      end
 
     IO.puts("Finding device with IP #{device_ip}...")
-    {:ok, devices} = UnifiClient.API.Devices.list(client, site)
+    devices =
+      case UnifiClient.API.Devices.list(client, site) do
+        {:ok, devices} ->
+          devices
+
+        {:error, error} ->
+          IO.puts("Listing devices failed: #{error.message}")
+          UnifiClient.Auth.logout(client)
+          System.halt(1)
+      end
 
     device = Enum.find(devices, fn d -> d["ip"] == device_ip end)
 

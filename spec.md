@@ -100,6 +100,11 @@ or description. Protect has no sites.
   `examples/` (§7). A work item that changes console-facing behaviour states
   in its completion note which console and application version it was
   verified against.
+- **CI is the hard gate** (`.gitlab-ci.yml`): every push and merge request
+  runs `mix format --check-formatted`, `mix compile --force
+  --warnings-as-errors`, `mix test`, and every example's `--help`; the
+  project only merges on a green pipeline. Filed under #7 after the suite
+  sat red for nine months with nothing running it.
 
 ---
 
@@ -663,7 +668,9 @@ Scripts in `examples/` are runnable with `elixir examples/<name>.exs`. Each:
 - reads `UNIFI_HOST`, `UNIFI_USER`, `UNIFI_PASS` from the environment, plus
   `UNIFI_SITE` (default `default`) and `UNIFI_TYPE` (`udm_pro` | `controller`,
   default `udm_pro`);
-- accepts `-h` / `--help` and prints a usage message;
+- accepts `-h` / `--help` and prints a usage message; a failed login or
+  listing prints `<what> failed: <error.message>` and exits 1 (never a
+  `MatchError`);
 - uses `Mix.install` with a `path:` dependency on this checkout, so they run
   without a checkout-wide build.
 
