@@ -183,4 +183,224 @@ defmodule UnifiClient.APITest do
       refute File.exists?(dest)
     end
   end
+
+  describe "session renewal" do
+    # A stub whose behaviour depends on how many times each path was hit.
+    # `script` maps {path, nth_call} -> response fun; unknown → flunk.
+    defp scripted(script, test_pid) do
+      {:ok, counter} = Agent.start_link(fn -> %{} end)
+
+      fn conn ->
+        n =
+          Agent.get_and_update(counter, fn m ->
+            {Map.get(m, conn.request_path, 0) + 1, Map.update(m, conn.request_path, 1, &(&1 + 1))}
+          end)
+
+        send(test_pid, {:hit, conn.request_path, n, Plug.Conn.get_req_header(conn, "cookie")})
+
+        case Map.fetch(script, {conn.request_path, n}) do
+          {:ok, fun} -> fun.(conn)
+          :error -> flunk("unexpected call ##{n} to #{conn.request_path}")
+        end
+      end
+    end
+
+    defp unauthorized(conn),
+      do: conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"error" => "expired"})
+
+    defp ok_data(conn),
+      do: Req.Test.json(conn, %{"meta" => %{"rc" => "ok"}, "data" => [%{"ok" => true}]})
+
+    defp login_ok(conn) do
+      conn
+      |> Plug.Conn.put_resp_header("set-cookie", "TOKEN=renewed; Path=/; HttpOnly")
+      |> Plug.Conn.put_resp_header("x-csrf-token", "csrf2")
+      |> Req.Test.json(%{"unique_id" => "u"})
+    end
+
+    # The renewal login is built from the client's own Req, so the stub has
+    # to be on the client (req_options:), not on the call.
+    defp logged_in_client(opts \\ []) do
+      {:ok, c} =
+        Client.new(
+          [
+            host: "udm.local",
+            username: "svc",
+            password: "pw",
+            req_options: [plug: {Req.Test, @stub}]
+          ] ++
+            opts
+        )
+
+      Client.mark_logged_in(c)
+    end
+
+    test "a 401 triggers one login and the retry carries the new cookie" do
+      client = logged_in_client()
+
+      Req.Test.stub(
+        @stub,
+        scripted(
+          %{
+            {"/proxy/network/api/x", 1} => &unauthorized/1,
+            {"/api/auth/login", 1} => &login_ok/1,
+            {"/proxy/network/api/x", 2} => &ok_data/1
+          },
+          self()
+        )
+      )
+
+      assert {:ok, [%{"ok" => true}]} = API.get(client, "/api/x")
+
+      assert_received {:hit, "/proxy/network/api/x", 1, _}
+      assert_received {:hit, "/api/auth/login", 1, _}
+      assert_received {:hit, "/proxy/network/api/x", 2, ["TOKEN=renewed"]}
+      refute_received {:hit, "/api/auth/login", 2, _}
+    end
+
+    test "a second 401 after renewal is the auth error; login is hit once" do
+      client = logged_in_client()
+
+      Req.Test.stub(
+        @stub,
+        scripted(
+          %{
+            {"/proxy/network/api/x", 1} => &unauthorized/1,
+            {"/api/auth/login", 1} => &login_ok/1,
+            {"/proxy/network/api/x", 2} => &unauthorized/1
+          },
+          self()
+        )
+      )
+
+      assert {:error, %Error{code: :authentication_failed}} = API.get(client, "/api/x")
+
+      refute_received {:hit, "/api/auth/login", 2, _}
+      refute_received {:hit, "/proxy/network/api/x", 3, _}
+    end
+
+    test "a failed login is returned and the request is not retried" do
+      client = logged_in_client()
+
+      Req.Test.stub(
+        @stub,
+        scripted(
+          %{
+            {"/proxy/network/api/x", 1} => &unauthorized/1,
+            {"/api/auth/login", 1} => fn conn ->
+              conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"errors" => ["bad password"]})
+            end
+          },
+          self()
+        )
+      )
+
+      assert {:error, %Error{code: :authentication_failed, message: "bad password"}} =
+               API.get(client, "/api/x")
+
+      refute_received {:hit, "/proxy/network/api/x", 2, _}
+    end
+
+    test "no renewal when opted out, not logged in, or without credentials" do
+      test = self()
+
+      Req.Test.stub(@stub, fn conn ->
+        send(test, {:hit, conn.request_path, 1, []})
+        if conn.request_path =~ "login", do: flunk("login must not be attempted")
+        unauthorized(conn)
+      end)
+
+      plug = [plug: {Req.Test, @stub}]
+
+      assert {:error, %Error{code: :authentication_failed}} =
+               API.get(logged_in_client(), "/api/x", reauth: false)
+
+      {:ok, never_logged_in} = Client.new(host: "udm.local", username: "svc", password: "pw")
+
+      assert {:error, %Error{code: :authentication_failed}} =
+               API.get(never_logged_in, "/api/x", plug)
+
+      {:ok, no_pw} = Client.new(host: "udm.local", username: "svc")
+
+      assert {:error, %Error{code: :authentication_failed}} =
+               API.get(Client.mark_logged_in(no_pw), "/api/x", plug)
+
+      refute_received {:hit, "/api/auth/login", _, _}
+    end
+
+    @tag :tmp_dir
+    test "download/4 renews and then writes the file", %{tmp_dir: dir} do
+      client = logged_in_client()
+      dest = Path.join(dir, "after.jpg")
+
+      Req.Test.stub(
+        @stub,
+        scripted(
+          %{
+            {"/proxy/protect/api/cameras/c/snapshot", 1} => &unauthorized/1,
+            {"/api/auth/login", 1} => &login_ok/1,
+            {"/proxy/protect/api/cameras/c/snapshot", 2} => fn conn ->
+              conn
+              |> Plug.Conn.put_resp_content_type("image/jpeg")
+              |> Plug.Conn.send_resp(200, "JPEG")
+            end
+          },
+          self()
+        )
+      )
+
+      assert {:ok, ^dest} =
+               API.download(client, "/api/cameras/c/snapshot", dest,
+                 app: :protect,
+                 plug: {Req.Test, @stub}
+               )
+
+      assert File.read!(dest) == "JPEG"
+    end
+
+    @tag :tmp_dir
+    test "download/4 with 401 twice writes nothing", %{tmp_dir: dir} do
+      client = logged_in_client()
+      dest = Path.join(dir, "never.jpg")
+
+      Req.Test.stub(
+        @stub,
+        scripted(
+          %{
+            {"/proxy/protect/api/cameras/c/snapshot", 1} => &unauthorized/1,
+            {"/api/auth/login", 1} => &login_ok/1,
+            {"/proxy/protect/api/cameras/c/snapshot", 2} => &unauthorized/1
+          },
+          self()
+        )
+      )
+
+      assert {:error, %Error{code: :authentication_failed}} =
+               API.download(client, "/api/cameras/c/snapshot", dest,
+                 app: :protect,
+                 plug: {Req.Test, @stub}
+               )
+
+      refute File.exists?(dest)
+    end
+
+    test "a :controller renews through /api/login" do
+      client = logged_in_client(type: :controller)
+
+      Req.Test.stub(
+        @stub,
+        scripted(
+          %{
+            {"/api/x", 1} => &unauthorized/1,
+            {"/api/login", 1} => &login_ok/1,
+            {"/api/x", 2} => &ok_data/1
+          },
+          self()
+        )
+      )
+
+      assert {:ok, _} = API.get(client, "/api/x")
+      assert_received {:hit, "/api/login", 1, _}
+    end
+  end
 end

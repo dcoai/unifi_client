@@ -30,9 +30,23 @@ defmodule UnifiClient.API do
   self-hosted `:controller`) returns `{:error, %Error{code: :app_unavailable}}`
   without making a request.
 
+  ## Session renewal
+
+  Console sessions expire. When a request answers `401` and the client was
+  logged in with a username and password on the struct, every function here
+  logs in again once (`UnifiClient.Auth.login/2`) and re-issues the request;
+  a second `401`, or a failed login, is returned as the authentication error.
+  The renewed cookies live in the shared `UnifiClient.CookieJar`, so the
+  retry — and every later call through any copy of the client struct — uses
+  them. The struct's own `csrf_token` field is not refreshed; it is
+  informational, the jar's token is what requests send.
+
+  Pass `reauth: false` to observe a `401` instead (e.g. a health check).
+  A long-running process therefore never needs to handle expiry itself.
+
   """
 
-  alias UnifiClient.{Client, Response, Error}
+  alias UnifiClient.{Auth, Client, Response, Error}
 
   @doc """
   Makes a GET request to the UniFi API.
@@ -41,8 +55,8 @@ defmodule UnifiClient.API do
 
     * `client` - An authenticated `UnifiClient.Client`
     * `path` - The API path (prefix is added automatically for absolute paths)
-    * `opts` - `app:` (default `:network`); everything else is passed to
-      `Req.request/2`
+    * `opts` - `app:` (default `:network`), `reauth:` (default `true`);
+      everything else is passed to `Req.request/2`
 
   ## Returns
 
@@ -198,8 +212,9 @@ defmodule UnifiClient.API do
     * `client` - An authenticated `UnifiClient.Client`
     * `path` - The API path
     * `dest` - A file path, or `:memory` to return the body as a binary
-    * `opts` - `app:` (default `:network`); everything else is passed to
-      `Req.request/2`, e.g. `receive_timeout:` for a slow export
+    * `opts` - `app:` (default `:network`), `reauth:` (default `true`);
+      everything else is passed to `Req.request/2`, e.g. `receive_timeout:`
+      for a slow export
 
   ## Returns
 
@@ -228,9 +243,9 @@ defmodule UnifiClient.API do
     if Client.app_available?(client, app) do
       url = build_url(client, app, path)
 
-      case Req.request(client.req, [{:method, method}, {:url, url} | opts]) do
+      case run(client, [{:method, method}, {:url, url} | opts]) do
         {:ok, response} -> Response.parse(response)
-        {:error, exception} -> {:error, Error.connection_error(exception)}
+        {:error, %Error{} = error} -> {:error, error}
       end
     else
       {:error, Error.app_unavailable(app)}
@@ -241,30 +256,61 @@ defmodule UnifiClient.API do
   # every other status is collected into a plain binary and decoded like a
   # normal response. That is what keeps error bodies off the disk.
   defp do_download(client, url, :memory, opts) do
-    case Req.request(client.req, [{:method, :get}, {:url, url} | opts]) do
+    case run(client, [{:method, :get}, {:url, url} | opts]) do
       {:ok, %Req.Response{status: 200, body: body}} -> {:ok, body}
       {:ok, response} -> Response.parse(response)
-      {:error, exception} -> {:error, Error.connection_error(exception)}
+      {:error, %Error{} = error} -> {:error, error}
     end
   end
 
   defp do_download(client, url, dest, opts) when is_binary(dest) do
     req_opts = [{:method, :get}, {:url, url}, {:into, File.stream!(dest)} | opts]
 
-    case Req.request(client.req, req_opts) do
+    case run(client, req_opts) do
       {:ok, %Req.Response{status: 200}} ->
         {:ok, dest}
 
       {:ok, response} ->
         Response.parse(response)
 
-      {:error, exception} ->
+      {:error, %Error{} = error} ->
         # The collectable may have been opened and partially written before
         # the connection dropped; a partial download is not a download.
+        # (Nothing was written on a 401, so removing is harmless there.)
         _ = File.rm(dest)
+        {:error, error}
+    end
+  end
+
+  # Issues the request, renewing the session once on a 401 when the client
+  # can log in by itself. Transport exceptions are normalised to %Error{}
+  # here so callers see one error shape.
+  defp run(%Client{} = client, req_opts) do
+    {reauth, req_opts} = Keyword.pop(req_opts, :reauth, true)
+    do_run(client, req_opts, reauth and can_login?(client))
+  end
+
+  defp do_run(client, req_opts, reauth?) do
+    case Req.request(client.req, req_opts) do
+      {:ok, %Req.Response{status: 401}} when reauth? ->
+        case Auth.login(client) do
+          {:ok, _renewed} -> do_run(client, req_opts, false)
+          {:error, %Error{} = error} -> {:error, error}
+        end
+
+      {:ok, response} ->
+        {:ok, response}
+
+      {:error, exception} ->
         {:error, Error.connection_error(exception)}
     end
   end
+
+  defp can_login?(%Client{logged_in: true, username: u, password: p})
+       when is_binary(u) and is_binary(p),
+       do: true
+
+  defp can_login?(%Client{}), do: false
 
   defp build_url(%Client{} = client, app, "/" <> _ = path) do
     # Check if path already has the selected app's prefix to avoid double-prefixing
