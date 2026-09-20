@@ -49,8 +49,9 @@ follow them too.
 - No `try`/`rescue`/`catch` anywhere in `lib/`. Failure is a value.
 - Transport failures from Req (`{:error, exception}`) become
   `Error.connection_error(exception)`.
-- HTTP status is inspected before body shape: 401 → `:authentication_failed`,
-  404 → `:not_found`, other non-2xx → `:http_error` carrying `%{status:, body:}`.
+- HTTP status is inspected before body shape: 401 → `:authentication_failed`
+  (after one automatic re-login where §2.4 allows it), 404 → `:not_found`,
+  other non-2xx → `:http_error` carrying `%{status:, body:}`.
 - A 2xx body is then parsed by envelope (§2.5); an envelope that reports
   failure becomes `{:error, _}` even though the HTTP status was 200.
 
@@ -91,8 +92,10 @@ or description. Protect has no sites.
 ### 1.5 Testing
 
 - Unit tests use `ExUnit`; HTTP is stubbed with `Req.Test` by passing
-  `plug: {Req.Test, Stub}` through a function's `opts` (which `API` forwards
-  to Req), so no test reaches a real console. `plug` is a test-only dep.
+  `plug: {Req.Test, Stub}` either through a function's `opts` (which `API`
+  forwards to Req) or as `Client.new(req_options: [plug: ...])` when the
+  stub must also see requests the client makes on its own (the renewal
+  login). No test reaches a real console. `plug` is a test-only dep.
 - Integration behaviour is exercised manually with the scripts in
   `examples/` (§7). A work item that changes console-facing behaviour states
   in its completion note which console and application version it was
@@ -118,6 +121,7 @@ is connected until `Auth.login/2`.
   type: :udm_pro | :controller,        # default :udm_pro
   verify_ssl: boolean(),               # default false
   timeout: pos_integer(),              # default 30_000 ms, Req receive_timeout
+  req_options: keyword(),              # merged into the base Req.new/1 (retry:, finch:, plug: …)
   req: Req.Request.t(),                # built by new/1
   cookie_jar: pid(),                   # CookieJar agent, started by new/1
   csrf_token: String.t() | nil,
@@ -137,7 +141,7 @@ Cloud Key Gen2+). `:controller` is the self-hosted Network application.
 
 | Function | Behaviour |
 |---|---|
-| `new(opts)` | Validates `host` (required, non-empty binary), `type` (one of the two atoms, default `:udm_pro`), `port` (positive integer, defaults by type). Starts a `CookieJar`. Builds `req` with `base_url`, `receive_timeout: timeout`, `connect_options: [transport_opts: [verify: :verify_none]]` unless `verify_ssl: true`, and the CookieJar steps attached. Returns `{:ok, client}` or `{:error, :host_required \| :invalid_host \| :invalid_type \| :invalid_port}`. |
+| `new(opts)` | Validates `host` (required, non-empty binary), `type` (one of the two atoms, default `:udm_pro`), `port` (positive integer, defaults by type). Starts a `CookieJar`. Builds `req` with `base_url`, `receive_timeout: timeout`, `connect_options: [transport_opts: [verify: :verify_none]]` unless `verify_ssl: true`, then `req_options` merged over those (so a caller can override any of them for every request this client makes, login included), and the CookieJar steps attached. Returns `{:ok, client}` or `{:error, :host_required \| :invalid_host \| :invalid_type \| :invalid_port}`. |
 | `new!(opts)` | `new/1` or raise `ArgumentError`. |
 | `base_url(client)` | `"https://#{host}:#{port}"`. |
 | `api_prefix(client)` | `app_prefix(client, :network)`. |
@@ -153,7 +157,7 @@ Cloud Key Gen2+). `:controller` is the self-hosted Network application.
 
 | Function | Behaviour |
 |---|---|
-| `login(client, opts \\ [])` | Requires `username` and `password` on the struct (else `{:error, %Error{code: :authentication_failed}}` without a request). POSTs `%{"username", "password", "remember"}` (`remember:` opt, default `true`) to `login_endpoint`. On 200 the cookies and `x-csrf-token` are already captured by the CookieJar response step; the CSRF token is copied onto the struct and `logged_in` set. Returns `{:ok, client}` — **the returned struct must be used for subsequent calls.** 401/403 → `:authentication_failed` with the console's message (`errors[0]`, `error`, or `meta.msg`) or a default; other status → `:http_error`. |
+| `login(client, opts \\ [])` | Requires `username` and `password` on the struct (else `{:error, %Error{code: :authentication_failed}}` without a request). POSTs `%{"username", "password", "remember"}` (`remember:` opt, default `true`) to `login_endpoint`. On 200 the cookies and `x-csrf-token` are already captured by the CookieJar response step; the CSRF token is copied onto the struct and `logged_in` set. Returns `{:ok, client}` — **use the returned struct for subsequent calls**; it is what enables §2.4's session renewal. 401/403 → `:authentication_failed` with the console's message (`errors[0]`, `error`, or `meta.msg`) or a default; other status → `:http_error`. |
 | `logout(client)` | No-op `:ok` if not logged in. POSTs `{}` to `logout_endpoint`; 200 or 302 clears the jar and returns `:ok`. |
 | `self(client)` | GET `api_url("/api/self")` → `{:ok, user_map}` (first element of `data`). |
 | `authenticated?(client)` | `false` if `logged_in` is false; otherwise `self/1` succeeds. Makes a request. |
@@ -198,6 +202,21 @@ Every function takes `app: :network | :protect` in `opts` (default
 `:network`); the key is consumed, not forwarded to Req. If
 `Client.app_available?/2` is false for the client's type the function returns
 `{:error, %Error{code: :app_unavailable}}` **before any I/O**.
+
+**Session renewal.** Every function also takes `reauth:` (default `true`,
+consumed). When a request answers HTTP `401` and the client *can log in by
+itself* — `logged_in` is true and `username`/`password` are binaries on the
+struct — the function calls `Auth.login/2` **once** and re-issues the same
+request; the retried request's `401` is returned as the authentication
+error, and a login failure is returned as its own `%Error{}` without a
+retry. The login endpoint is therefore hit at most once per call and never
+for a client without credentials or with `reauth: false`. The renewed
+cookies and CSRF token land in the shared `CookieJar`, so the retry and
+every later request through any copy of the struct use them; the struct's
+own `csrf_token` field is informational and is not refreshed. For
+`download/4` the retry is safe because a `401` never touches the
+collectable. `Auth.login/2` itself does not go through `API`, so there is
+no recursion.
 
 URL rule (`build_url`): a path beginning with `/` gets the selected app's
 prefix prepended **unless it already starts with that prefix**; any other

@@ -41,6 +41,7 @@ defmodule UnifiClient.Client do
           type: controller_type(),
           verify_ssl: boolean(),
           timeout: pos_integer(),
+          req_options: keyword(),
           req: Req.Request.t() | nil,
           cookie_jar: pid() | nil,
           csrf_token: String.t() | nil,
@@ -58,6 +59,7 @@ defmodule UnifiClient.Client do
     type: :udm_pro,
     verify_ssl: false,
     timeout: 30_000,
+    req_options: [],
     logged_in: false
   ]
 
@@ -73,6 +75,9 @@ defmodule UnifiClient.Client do
     * `:port` - The port number. Defaults to 443 for `:udm_pro` and 8443 for `:controller`.
     * `:verify_ssl` - Whether to verify SSL certificates. Defaults to `false`.
     * `:timeout` - Request timeout in milliseconds. Defaults to 30000.
+    * `:req_options` - Extra options merged into the base `Req.new/1` for
+      every request this client makes, including login (e.g. `retry:`,
+      `finch:`, `connect_options:`, or `plug:` in tests). Defaults to `[]`.
 
   ## Returns
 
@@ -94,6 +99,7 @@ defmodule UnifiClient.Client do
         type: type,
         verify_ssl: Keyword.get(opts, :verify_ssl, false),
         timeout: Keyword.get(opts, :timeout, 30_000),
+        req_options: Keyword.get(opts, :req_options, []),
         cookie_jar: cookie_jar
       }
 
@@ -290,11 +296,13 @@ defmodule UnifiClient.Client do
       end
 
     req =
-      Req.new(
+      [
         base_url: base_url(client),
         receive_timeout: client.timeout,
         connect_options: connect_options
-      )
+      ]
+      |> Keyword.merge(client.req_options)
+      |> Req.new()
       |> CookieJar.attach(client.cookie_jar)
 
     %{client | req: req}
