@@ -515,8 +515,16 @@ when none remain.
 | `Protect.Events.list(client, opts)` | implemented | GET `/api/events?start=&end=&types=&limit=` — `start:`, `end:` (DateTime or ms), `types:` (list joined with commas: `"motion"`, `"smartDetectZone"`, `"ring"`, …; `[]` ≡ absent), `limit:`; only given keys sent | `{:ok, [event]}` |
 | `Protect.Events.thumbnail(client, event_id, opts)` | implemented | GET `/api/events/:id/thumbnail` — `dest:` (default `:memory`) | `{:ok, jpeg_binary}` or path |
 | `Protect.Events.heatmap(client, event_id, opts)` | implemented | GET `/api/events/:id/heatmap` — `dest:` (default `:memory`) | `{:ok, png_binary}` or path |
-| `Protect.Video.export(client, camera_id, start, end_, dest, opts \\ [])` | implemented | GET `/api/video/export?camera=&start=&end=&type=&filename=` streamed to `dest` via `API.download/4` — `type:` `:rotating` (default) or `:timelapse`, `filename:` (default `Path.basename(dest)`, `"export.mp4"` for `:memory`), `timeout:`; `end_ <= start` → `{:error, %Error{code: :invalid_window}}` before any request | `{:ok, dest}` or `{:ok, mp4_binary}` |
+| `Protect.Cameras.channels(camera)` | implemented | pure | `camera["channels"]` or `[]` — entries carry `"id"` (0 high / 1 medium / 2 low), `"width"`, `"height"`, `"fps"` |
+| `Protect.Video.export(client, camera_id, start, end_, dest, opts \\ [])` | implemented | GET `/api/video/export?camera=&channel=&start=&end=&type=&fps=&filename=` streamed to `dest` via `API.download/4` — `type:` `:rotating` (default) or `:timelapse`, `channel:` (0–2), `fps:` (timelapse), `filename:` (default `Path.basename(dest)`, `"export.mp4"` for `:memory`), `timeout:`; `channel`/`fps` sent only when given; `end_ <= start` → `{:error, %Error{code: :invalid_window}}` before any request | `{:ok, dest}` or `{:ok, mp4_binary}` |
+| `Protect.Video.export_many(client, camera_ids, start, end_, dir, opts \\ [])` | implemented | `export/6` per camera as `Task.async_stream` (`timeout: :infinity`, ordered, **linked to the caller**), `max_concurrency:` (default 2, a commented module attribute), `dest:` (`camera_id -> path`, default `<dir>/<id>.mp4`), other opts to `export/6`; `dir` is `mkdir_p`'d. Batch checks before any task: `:app_unavailable`, `:invalid_window`, `:dir_error` | `{:ok, [{camera_id, {:ok, path} \| {:error, %Error{}}}]}` in input order, or `{:error, %Error{}}` |
 | `Protect.Video.export_timeout(client, start, end_, opts \\ [])` | implemented | pure | ms — see below |
+
+**Cancel contract:** because `export_many/6`'s tasks are linked to the
+calling process, killing that process terminates every in-flight download.
+A cancelled or failed export may leave a partial file in `dir` — the
+caller owns `dir` and removes it on cancel; `export/6` itself removes its
+own partial file only on a transport failure it observes (§6.1).
 
 `export` timeout: the console transcodes on demand, so the wait scales with
 clip length. `export_timeout/4` derives it — `max(client.timeout, clip_ms ×
@@ -526,9 +534,10 @@ and `timeout:` is an explicit override. It is passed as Req's
 with no file left behind (§6.1).
 
 Examples: `examples/protect_cameras.exs` (list, `--snapshot ID --out FILE
-[--width PX]`) and `examples/protect_export.exs` (`--camera --start --end
---out [--type]`; ISO 8601 times with zone; prints the derived timeout before
-starting and the byte count and elapsed time after).
+[--width PX]`) and `examples/protect_export.exs` (`--camera id[,id…] --start
+--end --out [--type] [--channel] [--concurrency]`; ISO 8601 times with zone;
+prints the derived timeout before starting and per-camera bytes and elapsed
+time after).
 
 ### 6.3 Event WebSocket
 
@@ -629,7 +638,7 @@ Scripts in `examples/` are runnable with `elixir examples/<name>.exs`. Each:
 | `client_list.exs` | `API.Clients.list_active/2` |
 | `device_poe.exs` | `API.Devices.set_poe_mode/5` |
 | `protect_cameras.exs` | `Protect.Cameras.list/2`, `snapshot/3` — Protect needs no `UNIFI_SITE`/`UNIFI_TYPE` |
-| `protect_export.exs` | `Protect.Video.export/6`, `export_timeout/4` |
+| `protect_export.exs` | `Protect.Video.export/6` (one `--camera`) or `export_many/6` (comma list, `--out` a directory); `--channel`, `--concurrency` |
 | `protect_events.exs` | `Protect.WebSocket.start_link/1` (`--resume <lastUpdateId>`) |
 
 ### 7.2 Packaging

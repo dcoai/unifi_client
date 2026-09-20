@@ -26,7 +26,14 @@ defmodule UnifiClient.Protect.Video do
   # ten-minute wait. Callers that know better pass `timeout:`.
   @seconds_per_clip_second 2
 
+  # Concurrent exports per `export_many/6`. The NVR's export capacity is a
+  # property of the console we cannot measure from here; two keeps a UNVR
+  # responsive while still halving a six-camera batch. Callers who have
+  # measured their console pass `max_concurrency:`.
+  @default_max_concurrency 2
+
   @type export_type :: :rotating | :timelapse
+  @type camera_result :: {String.t(), {:ok, Path.t() | binary()} | {:error, Error.t()}}
 
   @doc """
   Exports the recording of `camera_id` between `start` and `end_` to `dest`.
@@ -39,6 +46,9 @@ defmodule UnifiClient.Protect.Video do
   ## Options
 
     * `:type` - `:rotating` (default; the normal recording) or `:timelapse`
+    * `:channel` - stream to export: `0` high (default on the console), `1`
+      medium, `2` low. See `UnifiClient.Protect.Cameras.channels/1`.
+    * `:fps` - frames per second for a `:timelapse` export
     * `:filename` - the `filename` query parameter; defaults to the basename
       of `dest` (or `"export.mp4"` for `:memory`)
     * `:timeout` - overrides the derived request timeout, in ms
@@ -64,21 +74,74 @@ defmodule UnifiClient.Protect.Video do
       {:error, Error.new("Export window is empty: end must be after start", :invalid_window)}
     else
       {type, opts} = Keyword.pop(opts, :type, :rotating)
+      {channel, opts} = Keyword.pop(opts, :channel)
+      {fps, opts} = Keyword.pop(opts, :fps)
       {filename, opts} = Keyword.pop(opts, :filename, default_filename(dest))
       {timeout, opts} = Keyword.pop(opts, :timeout)
 
       path =
         API.with_query("/api/video/export",
           camera: camera_id,
+          channel: channel,
           start: start_ms,
           end: end_ms,
           type: export_type(type),
+          fps: fps,
           filename: filename
         )
 
       receive_timeout = timeout || export_timeout(client, start_ms, end_ms)
 
       API.download(client, path, dest, Keyword.put(opts, :receive_timeout, receive_timeout))
+    end
+  end
+
+  @doc """
+  Exports the same window from several cameras concurrently.
+
+  One file per camera, `<dir>/<camera_id>.mp4` by default. Each export is
+  `export/6` with the same `start`/`end_` and `opts`, run in tasks
+  **linked to the caller**: killing the calling process kills every
+  in-flight download, which is how a job is cancelled. `dir` is created if
+  missing.
+
+  ## Options
+
+    * `:max_concurrency` - exports in flight at once (default
+      `#{@default_max_concurrency}`; see the module source for why)
+    * `:dest` - `camera_id -> path` function overriding the file layout
+    * every other key is passed to `export/6` (`:channel`, `:type`, `:timeout`, …)
+
+  ## Returns
+
+    * `{:ok, [{camera_id, {:ok, path} | {:error, error}}]}` - one entry per
+      camera, in the order given; a camera with no footage is an error entry,
+      not a batch failure
+    * `{:error, error}` - nothing was attempted: `:app_unavailable`,
+      `:invalid_window`, or `:dir_error` (`reason` holds the posix error)
+
+  """
+  @spec export_many(Client.t(), [String.t()], Time.t(), Time.t(), Path.t(), keyword()) ::
+          {:ok, [camera_result()]} | {:error, Error.t()}
+  def export_many(%Client{} = client, camera_ids, start, end_, dir, opts \\ [])
+      when is_list(camera_ids) and is_binary(dir) do
+    {max_concurrency, opts} = Keyword.pop(opts, :max_concurrency, @default_max_concurrency)
+    {dest, opts} = Keyword.pop(opts, :dest, &Path.join(dir, "#{&1}.mp4"))
+
+    with :ok <- check_app(client),
+         :ok <- check_window(start, end_),
+         :ok <- ensure_dir(dir) do
+      results =
+        camera_ids
+        |> Task.async_stream(
+          fn id -> {id, export(client, id, start, end_, dest.(id), opts)} end,
+          max_concurrency: max_concurrency,
+          ordered: true,
+          timeout: :infinity
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      {:ok, results}
     end
   end
 
@@ -110,6 +173,28 @@ defmodule UnifiClient.Protect.Video do
       :error ->
         clip_ms = Time.to_ms(end_) - Time.to_ms(start)
         max(client_timeout, clip_ms * @seconds_per_clip_second)
+    end
+  end
+
+  defp check_app(client) do
+    if Client.app_available?(client, :protect),
+      do: :ok,
+      else: {:error, Error.app_unavailable(:protect)}
+  end
+
+  defp check_window(start, end_) do
+    if Time.to_ms(end_) <= Time.to_ms(start),
+      do: {:error, Error.new("Export window is empty: end must be after start", :invalid_window)},
+      else: :ok
+  end
+
+  defp ensure_dir(dir) do
+    case File.mkdir_p(dir) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error, Error.new("Cannot create #{dir}: #{reason}", :dir_error, reason)}
     end
   end
 
