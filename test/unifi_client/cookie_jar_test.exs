@@ -32,16 +32,40 @@ defmodule UnifiClient.CookieJarTest do
       assert CookieJar.get_csrf_token(jar) == nil
     end
 
-    test "extracts TOKEN cookie" do
+    # UniFi OS: TOKEN is a JWT; the token is its csrfToken claim.
+    defp jwt(claims) do
+      header = Base.url_encode64(~s({"alg":"HS256","typ":"JWT"}), padding: false)
+      payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+      "#{header}.#{payload}.signature"
+    end
+
+    test "extracts the csrfToken claim from a TOKEN JWT cookie" do
       {:ok, jar} = CookieJar.start_link()
 
       cookies = [
         "SESSION=abc123; Path=/",
-        "TOKEN=my-csrf-token; Path=/"
+        "TOKEN=#{jwt(%{"csrfToken" => "my-csrf-token", "userId" => "u"})}; Path=/; HttpOnly"
       ]
 
       CookieJar.put_cookies(jar, cookies)
       assert CookieJar.get_csrf_token(jar) == "my-csrf-token"
+    end
+
+    test "a TOKEN cookie that is not a JWT with the claim yields no token" do
+      {:ok, jar} = CookieJar.start_link()
+      CookieJar.put_csrf_token(jar, "kept")
+
+      for value <- ["opaque", "a.b", "a.!!!.c", "#{jwt(%{"other" => 1})}"] do
+        CookieJar.put_cookies(jar, ["TOKEN=#{value}; Path=/"])
+        assert CookieJar.get_csrf_token(jar) == "kept", value
+      end
+    end
+
+    test "the x-csrf-token header overrides a cookie-derived token" do
+      {:ok, jar} = CookieJar.start_link()
+      CookieJar.put_cookies(jar, ["csrf_token=from-cookie; Path=/"])
+      CookieJar.put_csrf_token(jar, "from-header")
+      assert CookieJar.get_csrf_token(jar) == "from-header"
     end
 
     test "extracts csrf_token cookie" do
@@ -60,7 +84,7 @@ defmodule UnifiClient.CookieJarTest do
     test "clears all cookies and token" do
       {:ok, jar} = CookieJar.start_link()
 
-      cookies = ["TOKEN=abc; Path=/", "SESSION=xyz; Path=/"]
+      cookies = ["csrf_token=abc; Path=/", "SESSION=xyz; Path=/"]
       CookieJar.put_cookies(jar, cookies)
 
       assert CookieJar.get_cookies(jar) != []

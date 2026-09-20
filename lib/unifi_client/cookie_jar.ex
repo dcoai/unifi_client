@@ -150,13 +150,56 @@ defmodule UnifiClient.CookieJar do
   end
 
   @doc """
-  Stores cookies from Set-Cookie headers.
+  Stores cookies from Set-Cookie headers, deriving the CSRF token from them
+  when they carry one.
+
+  Consoles deliver the token two ways, and the header (see `attach/2`) is
+  not always present:
+
+    * self-hosted Network controller (`/api/login`): a `csrf_token=` cookie
+      whose value *is* the token;
+    * UniFi OS (`/api/auth/login`): a `TOKEN=` cookie holding a JWT whose
+      payload has a `csrfToken` claim.
+
+  Whatever is found here is stored; an `x-csrf-token` response header
+  processed in the same response step overrides it, since the header is
+  the console's most explicit statement. Cookies without either yield no
+  token and leave the stored one alone.
   """
   @spec put_cookies(pid(), [String.t()]) :: :ok
   def put_cookies(jar, cookies) when is_list(cookies) do
+    derived = csrf_from_cookies(cookies)
+
     Agent.update(jar, fn state ->
-      %{state | cookies: cookies}
+      %{state | cookies: cookies, csrf_token: derived || state.csrf_token}
     end)
+  end
+
+  @doc false
+  def csrf_from_cookies(cookies) do
+    Enum.find_value(cookies, fn cookie ->
+      case cookie
+           |> String.split(";")
+           |> List.first()
+           |> String.trim()
+           |> String.split("=", parts: 2) do
+        ["csrf_token", value] when value != "" -> value
+        ["TOKEN", jwt] -> csrf_claim(jwt)
+        _ -> nil
+      end
+    end)
+  end
+
+  # The csrfToken claim of a JWT, or nil for anything that is not one.
+  # Every step returns a value on bad input; nothing here raises.
+  defp csrf_claim(jwt) do
+    with [_header, payload, _signature] <- String.split(jwt, "."),
+         {:ok, json} <- Base.url_decode64(payload, padding: false),
+         {:ok, %{"csrfToken" => token}} when is_binary(token) <- Jason.decode(json) do
+      token
+    else
+      _ -> nil
+    end
   end
 
   @doc """
