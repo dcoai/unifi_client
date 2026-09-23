@@ -126,12 +126,16 @@ defmodule UnifiClient do
   @doc """
   Returns the library version.
 
+  Read from the application rather than written here: a literal is a
+  second place for the version to live, and it was already a release
+  behind when this was found.
+
   ## Example
 
-      iex> UnifiClient.version()
-      "0.1.0"
+      iex> UnifiClient.version() == Mix.Project.config()[:version]
+      true
 
   """
   @spec version() :: String.t()
-  def version, do: "0.1.2"
+  def version, do: Application.spec(:unifi_client, :vsn) |> to_string()
 end

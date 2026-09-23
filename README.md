@@ -14,7 +14,7 @@ by adding `unifi_client` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:unifi_client, "~> 0.1.2"}
+    {:unifi_client, "~> 0.2.0"}
   ]
 end
 ```
