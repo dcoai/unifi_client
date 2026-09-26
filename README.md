@@ -33,7 +33,7 @@ examples
 ├── device_poe.exs
 ├── list_sites.exs
 ├── protect_cameras.exs
-├── protect_events.exs
+├── protect_watch.exs
 └── protect_export.exs
 ```
 
@@ -105,7 +105,7 @@ end
 ```
 
 ```bash
-UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret elixir examples/protect_events.exs
+UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret elixir examples/protect_watch.exs
 ```
 
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)

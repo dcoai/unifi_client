@@ -1,7 +1,11 @@
-# Stream live UniFi Protect updates (motion, smart detections, camera state)
+# Watch UniFi Protect's live update stream (motion, smart detections,
+# camera state) as it happens
+#
+# This is the live half of Protect events. For what was recorded earlier —
+# and for an event's thumbnail or heatmap — see protect_recordings.exs.
 #
 # Usage:
-#   UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret elixir examples/protect_events.exs
+#   UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret elixir examples/protect_watch.exs
 #
 # Prints one line per update until Ctrl-C. Pass --resume <lastUpdateId> (printed
 # on connect and with every event) to continue from an earlier cursor without
@@ -33,9 +37,15 @@ defmodule ProtectEvents do
     IO.puts("Connecting to #{host}...")
 
     {:ok, client} =
-      UnifiClient.Client.new(host: host, username: username, password: password, verify_ssl: false)
+      UnifiClient.Client.new(
+        host: host,
+        username: username,
+        password: password,
+        verify_ssl: false
+      )
 
     IO.puts("Logging in...")
+
     client =
       case UnifiClient.Auth.login(client) do
         {:ok, client} ->
@@ -57,10 +67,13 @@ defmodule ProtectEvents do
           UnifiClient.Auth.logout(client)
           System.halt(1)
       end
+
     names = Map.new(cameras, fn cam -> {cam["id"], cam["name"] || cam["id"]} end)
 
     ws_opts = [client: client, subscriber: self()]
-    ws_opts = if opts[:resume], do: Keyword.put(ws_opts, :last_update_id, opts[:resume]), else: ws_opts
+
+    ws_opts =
+      if opts[:resume], do: Keyword.put(ws_opts, :last_update_id, opts[:resume]), else: ws_opts
 
     case UnifiClient.Protect.WebSocket.start_link(ws_opts) do
       {:ok, _ws} ->
@@ -87,7 +100,11 @@ defmodule ProtectEvents do
     model = action["modelKey"]
     id = action["id"]
     subject = if model == "camera", do: Map.get(names, id, id), else: id
-    changed = if is_map(data), do: data |> Map.keys() |> Enum.sort() |> Enum.join(","), else: inspect(data)
+
+    changed =
+      if is_map(data),
+        do: data |> Map.keys() |> Enum.sort() |> Enum.join(","),
+        else: inspect(data)
 
     IO.puts(
       "#{stamp}  #{String.pad_trailing(model || "?", 12)} #{String.pad_trailing(action["action"] || "?", 7)} " <>
@@ -95,7 +112,9 @@ defmodule ProtectEvents do
     )
 
     if model == "camera" and Map.has_key?(data, "isMotionDetected") do
-      IO.puts("           motion #{if data["isMotionDetected"], do: "started", else: "ended"} on #{subject}")
+      IO.puts(
+        "           motion #{if data["isMotionDetected"], do: "started", else: "ended"} on #{subject}"
+      )
     end
   end
 
@@ -108,7 +127,7 @@ defmodule ProtectEvents do
     Stream live UniFi Protect updates (motion, smart detections, camera state)
 
     Usage:
-      elixir examples/protect_events.exs [--resume <lastUpdateId>]
+      elixir examples/protect_watch.exs [--resume <lastUpdateId>]
 
     Environment variables (required):
       UNIFI_HOST       UniFi OS console hostname or IP (UDM, UNVR, UCG, ...)

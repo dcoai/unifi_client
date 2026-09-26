@@ -24,15 +24,17 @@ defmodule ListSites do
 
     IO.puts("Connecting to #{host}...")
 
-    {:ok, client} = UnifiClient.Client.new(
-      host: host,
-      username: username,
-      password: password,
-      type: type,
-      verify_ssl: false
-    )
+    {:ok, client} =
+      UnifiClient.Client.new(
+        host: host,
+        username: username,
+        password: password,
+        type: type,
+        verify_ssl: false
+      )
 
     IO.puts("Logging in...")
+
     client =
       case UnifiClient.Auth.login(client) do
         {:ok, client} ->
@@ -96,7 +98,9 @@ defmodule ListSites do
   defp parse_type(nil), do: :udm_pro
   defp parse_type("udm_pro"), do: :udm_pro
   defp parse_type("controller"), do: :controller
-  defp parse_type(other), do: raise "Invalid UNIFI_TYPE: #{other}. Use 'udm_pro' or 'controller'."
+
+  defp parse_type(other),
+    do: raise("Invalid UNIFI_TYPE: #{other}. Use 'udm_pro' or 'controller'.")
 end
 
 ListSites.run()

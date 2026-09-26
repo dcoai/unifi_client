@@ -39,15 +39,17 @@ defmodule ListClients do
 
     IO.puts("Connecting to #{host}...")
 
-    {:ok, client} = UnifiClient.Client.new(
-      host: host,
-      username: username,
-      password: password,
-      type: type,
-      verify_ssl: false
-    )
+    {:ok, client} =
+      UnifiClient.Client.new(
+        host: host,
+        username: username,
+        password: password,
+        type: type,
+        verify_ssl: false
+      )
 
     IO.puts("Logging in...")
+
     client =
       case UnifiClient.Auth.login(client) do
         {:ok, client} ->
@@ -136,6 +138,7 @@ defmodule ListClients do
     case String.split(str, "/") do
       [ip, prefix] ->
         ip_address?(ip) && match?({_, ""}, Integer.parse(prefix))
+
       _ ->
         false
     end
@@ -162,13 +165,17 @@ defmodule ListClients do
   defp apply_filter(clients, {:cidr, {network, mask}}) do
     Enum.filter(clients, fn c ->
       case c["ip"] do
-        nil -> false
+        nil ->
+          false
+
         ip ->
           case :inet.parse_address(String.to_charlist(ip)) do
             {:ok, ip_tuple} ->
               ip_int = ip_to_integer(ip_tuple)
               (ip_int &&& mask) == network
-            _ -> false
+
+            _ ->
+              false
           end
       end
     end)
@@ -185,16 +192,17 @@ defmodule ListClients do
 
   defp apply_filter(clients, {:regex, regex}) do
     Enum.filter(clients, fn c ->
-      searchable = [
-        c["hostname"],
-        c["name"],
-        c["ip"],
-        c["mac"],
-        c["essid"],
-        c["oui"]
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" ")
+      searchable =
+        [
+          c["hostname"],
+          c["name"],
+          c["ip"],
+          c["mac"],
+          c["essid"],
+          c["oui"]
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" ")
 
       Regex.match?(regex, searchable)
     end)
@@ -246,7 +254,9 @@ defmodule ListClients do
   defp parse_type(nil), do: :udm_pro
   defp parse_type("udm_pro"), do: :udm_pro
   defp parse_type("controller"), do: :controller
-  defp parse_type(other), do: raise "Invalid UNIFI_TYPE: #{other}. Use 'udm_pro' or 'controller'."
+
+  defp parse_type(other),
+    do: raise("Invalid UNIFI_TYPE: #{other}. Use 'udm_pro' or 'controller'.")
 
   defp format_connection(client) do
     cond do
@@ -259,7 +269,10 @@ defmodule ListClients do
   defp format_bytes(nil), do: "-"
   defp format_bytes(bytes) when bytes < 1024, do: "#{bytes} B"
   defp format_bytes(bytes) when bytes < 1024 * 1024, do: "#{Float.round(bytes / 1024, 1)} KB"
-  defp format_bytes(bytes) when bytes < 1024 * 1024 * 1024, do: "#{Float.round(bytes / 1024 / 1024, 1)} MB"
+
+  defp format_bytes(bytes) when bytes < 1024 * 1024 * 1024,
+    do: "#{Float.round(bytes / 1024 / 1024, 1)} MB"
+
   defp format_bytes(bytes), do: "#{Float.round(bytes / 1024 / 1024 / 1024, 1)} GB"
 
   defp print_table(headers, rows) do

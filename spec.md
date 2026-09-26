@@ -682,11 +682,27 @@ Scripts in `examples/` are runnable with `elixir examples/<name>.exs`. Each:
 | `device_poe.exs` | `API.Devices.set_poe_mode/5` |
 | `protect_cameras.exs` | `Protect.Cameras.list/2`, `snapshot/3` — Protect needs no `UNIFI_SITE`/`UNIFI_TYPE` |
 | `protect_export.exs` | `Protect.Video.export/6` (one `--camera`) or `export_many/6` (comma list, `--out` a directory); `--channel`, `--concurrency` |
-| `protect_events.exs` | `Protect.WebSocket.start_link/1` (`--resume <lastUpdateId>`) |
+| `protect_watch.exs` | `Protect.WebSocket.start_link/1` (`--resume <lastUpdateId>`) — the live stream |
+| `protect_recordings.exs` | `Protect.Events.list/2` over a window, `thumbnail/3`, `heatmap/3` — what was recorded |
+| `network_config.exs` | `API.Networks.list_wlans/2`, `list_networks/2` — read-only |
+| `firewall_rules.exs` | `API.Firewall.list_rules/2`, `list_port_forwards/2` — read-only |
+| `statistics.exs` | `API.Statistics.hourly_site/3`, `daily_site/3`, `dpi_stats/4`, `speedtest_results/2` |
+| `cloud_sites.exs` | `Cloud.Sites.list_hosts/1`, `list_sites/2`, `Cloud.Devices.list/3`, `Cloud.Clients.list/3` — an **API key**, not a console login |
+
+**Every public area has one.** A module nobody can see used is a module
+nobody uses; `examples/README.md` is the index, and says which credential
+each script needs — the console login for the Network and Protect scripts,
+a Site Manager API key for the Cloud one.
+
+**The mutating calls are documented, not demonstrated.** `API.Networks` and
+`API.Firewall` can create, update and delete; an example that changes a
+firewall because someone ran it to see what it did is not an example, so
+those scripts read and point at the module documentation for the rest.
 
 ### 7.2 Packaging
 
-- Hex package `unifi_client`, MIT, Elixir `~> 1.15`.
+- Hex package `unifi_client`, MIT, Elixir `~> 1.20` — the floor names the
+  version CI runs, and `version_test` fails if they drift apart.
 - Runtime deps: `req ~> 0.5`, `jason ~> 1.4`, `websockex ~> 0.4`.
 - `UnifiClient.version/0` returns the package version string and must match
   `@version` in `mix.exs` (the test asserts against `Mix.Project.config()`,

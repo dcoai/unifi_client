@@ -19,7 +19,9 @@ defmodule ProtectCameras do
     end
 
     {opts, _rest, invalid} =
-      OptionParser.parse(System.argv(), strict: [snapshot: :string, out: :string, width: :integer])
+      OptionParser.parse(System.argv(),
+        strict: [snapshot: :string, out: :string, width: :integer]
+      )
 
     if invalid != [] do
       IO.puts("Invalid options: #{inspect(invalid)}")
@@ -34,9 +36,15 @@ defmodule ProtectCameras do
     IO.puts("Connecting to #{host}...")
 
     {:ok, client} =
-      UnifiClient.Client.new(host: host, username: username, password: password, verify_ssl: false)
+      UnifiClient.Client.new(
+        host: host,
+        username: username,
+        password: password,
+        verify_ssl: false
+      )
 
     IO.puts("Logging in...")
+
     client =
       case UnifiClient.Auth.login(client) do
         {:ok, client} ->

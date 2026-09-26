@@ -57,9 +57,15 @@ defmodule ProtectExport do
     IO.puts("Connecting to #{host}...")
 
     {:ok, client} =
-      UnifiClient.Client.new(host: host, username: username, password: password, verify_ssl: false)
+      UnifiClient.Client.new(
+        host: host,
+        username: username,
+        password: password,
+        verify_ssl: false
+      )
 
     IO.puts("Logging in...")
+
     client =
       case UnifiClient.Auth.login(client) do
         {:ok, client} ->
@@ -93,7 +99,15 @@ defmodule ProtectExport do
 
   defp run_export(client, cameras, start, finish, dir, export_opts, concurrency) do
     many_opts = if concurrency, do: [max_concurrency: concurrency], else: []
-    UnifiClient.Protect.Video.export_many(client, cameras, start, finish, dir, many_opts ++ export_opts)
+
+    UnifiClient.Protect.Video.export_many(
+      client,
+      cameras,
+      start,
+      finish,
+      dir,
+      many_opts ++ export_opts
+    )
   end
 
   defp report({:ok, path}, elapsed) when is_binary(path) do
