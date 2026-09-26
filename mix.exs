@@ -8,7 +8,7 @@ defmodule UnifiClient.MixProject do
     [
       app: :unifi_client,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       docs: docs(),

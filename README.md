@@ -19,6 +19,9 @@ def deps do
 end
 ```
 
+Requires **Elixir 1.20 or newer** — the version this library is built and
+tested on.
+
 ## Quick Start
 
 see examples in the `examples/` directory.
