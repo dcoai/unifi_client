@@ -48,14 +48,24 @@ defmodule UnifiClient.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url}
+      links: %{"GitHub" => @source_url, "Changelog" => @source_url <> "/blob/main/CHANGELOG.md"},
+      # The defaults plus the specification and the examples: a tarball that
+      # can rebuild its own documentation, and that carries the twelve
+      # scripts the README sends a reader to.
+      files: ~w(lib examples .formatter.exs mix.exs README.md LICENSE CHANGELOG.md spec.md)
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "spec.md"],
+      extras: [
+        "README.md",
+        "spec.md",
+        # Titled, because two files called README.md would otherwise fight
+        # over the same page.
+        "examples/README.md": [filename: "examples", title: "Examples"]
+      ],
       source_ref: "v#{@version}"
     ]
   end
