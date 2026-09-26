@@ -34,15 +34,17 @@ defmodule DevicePoe do
 
     IO.puts("Connecting to #{host}...")
 
-    {:ok, client} = UnifiClient.Client.new(
-      host: host,
-      username: username,
-      password: password,
-      type: type,
-      verify_ssl: false
-    )
+    {:ok, client} =
+      UnifiClient.Client.new(
+        host: host,
+        username: username,
+        password: password,
+        type: type,
+        verify_ssl: false
+      )
 
     IO.puts("Logging in...")
+
     client =
       case UnifiClient.Auth.login(client) do
         {:ok, client} ->
@@ -54,6 +56,7 @@ defmodule DevicePoe do
       end
 
     IO.puts("Finding device with IP #{device_ip}...")
+
     devices =
       case UnifiClient.API.Devices.list(client, site) do
         {:ok, devices} ->
@@ -127,6 +130,7 @@ defmodule DevicePoe do
 
   defp parse_poe_state("on"), do: :on
   defp parse_poe_state("off"), do: :off
+
   defp parse_poe_state(other) do
     IO.puts("Error: Invalid PoE state '#{other}'. Use 'on' or 'off'.")
     System.halt(1)
@@ -166,7 +170,9 @@ defmodule DevicePoe do
 
   defp parse_single_port(str) do
     case Integer.parse(String.trim(str)) do
-      {port, ""} when port > 0 -> port
+      {port, ""} when port > 0 ->
+        port
+
       _ ->
         IO.puts("Error: Invalid port number '#{str}'")
         System.halt(1)
@@ -213,7 +219,9 @@ defmodule DevicePoe do
   defp parse_type(nil), do: :udm_pro
   defp parse_type("udm_pro"), do: :udm_pro
   defp parse_type("controller"), do: :controller
-  defp parse_type(other), do: raise "Invalid UNIFI_TYPE: #{other}. Use 'udm_pro' or 'controller'."
+
+  defp parse_type(other),
+    do: raise("Invalid UNIFI_TYPE: #{other}. Use 'udm_pro' or 'controller'.")
 end
 
 DevicePoe.run()
