@@ -2,6 +2,10 @@ defmodule UnifiClient.API.Firewall do
   @moduledoc """
   API operations for firewall rules.
 
+  Part of the **Network** application. `client` is an authenticated
+  `UnifiClient.Client` (`UnifiClient.Auth.login/1`), and `site` is a site
+  name as `UnifiClient.API.Sites.list/1` reports it — usually `"default"`.
+
   Manages firewall rules, port forwarding, and traffic rules
   on UniFi controllers.
 

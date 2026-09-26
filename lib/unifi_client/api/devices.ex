@@ -2,6 +2,10 @@ defmodule UnifiClient.API.Devices do
   @moduledoc """
   API operations for UniFi network devices.
 
+  Part of the **Network** application. `client` is an authenticated
+  `UnifiClient.Client` (`UnifiClient.Auth.login/1`), and `site` is a site
+  name as `UnifiClient.API.Sites.list/1` reports it — usually `"default"`.
+
   Devices include access points, switches, gateways, and other
   UniFi hardware managed by the controller.
 

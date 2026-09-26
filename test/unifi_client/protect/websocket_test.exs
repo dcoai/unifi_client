@@ -1,6 +1,8 @@
 defmodule UnifiClient.Protect.WebSocketTest do
   use ExUnit.Case, async: true
 
+  doctest UnifiClient.Protect.WebSocket
+
   @moduletag :capture_log
 
   alias UnifiClient.{Client, Error}

@@ -57,8 +57,16 @@ defmodule UnifiClient.WebSocket.Event do
 
   ## Examples
 
-      iex> UnifiClient.WebSocket.Event.parse(%{"data" => [%{"key" => "EVT_WU_Connected"}]})
-      %{type: :client_connected, key: "EVT_WU_Connected", ...}
+      iex> [event] = UnifiClient.WebSocket.Event.parse(%{"data" => [%{"key" => "EVT_WU_Connected"}]})
+      iex> {event.type, event.key}
+      {:client_connected, "EVT_WU_Connected"}
+
+  The whole event is kept under `:raw`, because the console sends fields
+  this library has never heard of and a caller may know what they mean:
+
+      iex> event = UnifiClient.WebSocket.Event.parse(%{"key" => "EVT_WU_Connected", "user" => "aa:bb"})
+      iex> event.raw["user"]
+      "aa:bb"
 
   """
   @spec parse(map()) :: t() | [t()]

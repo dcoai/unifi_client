@@ -2,6 +2,10 @@ defmodule UnifiClient.API.Networks do
   @moduledoc """
   API operations for network configuration.
 
+  Part of the **Network** application. `client` is an authenticated
+  `UnifiClient.Client` (`UnifiClient.Auth.login/1`), and `site` is a site
+  name as `UnifiClient.API.Sites.list/1` reports it — usually `"default"`.
+
   This module handles WLANs (wireless networks), LANs, VLANs,
   and other network configurations.
 

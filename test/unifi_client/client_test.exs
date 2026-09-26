@@ -1,6 +1,8 @@
 defmodule UnifiClient.ClientTest do
   use ExUnit.Case, async: true
 
+  doctest UnifiClient.Client
+
   alias UnifiClient.Client
 
   describe "new/1" do

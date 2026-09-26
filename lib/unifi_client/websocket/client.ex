@@ -5,6 +5,10 @@ defmodule UnifiClient.WebSocket.Client do
   Connects to the UniFi controller's WebSocket endpoint to receive
   live updates about device status, client connections, and other events.
 
+  This is the **Network** application's event stream, which is JSON.
+  Protect has its own, binary and with a resume cursor —
+  `UnifiClient.Protect.WebSocket`.
+
   ## Usage
 
   The WebSocket client is implemented as a GenServer that can be started

@@ -2,6 +2,10 @@ defmodule UnifiClient.API.Clients do
   @moduledoc """
   API operations for network clients (stations).
 
+  Part of the **Network** application. `client` is an authenticated
+  `UnifiClient.Client` (`UnifiClient.Auth.login/1`), and `site` is a site
+  name as `UnifiClient.API.Sites.list/1` reports it — usually `"default"`.
+
   Clients are devices connected to your UniFi network - computers,
   phones, IoT devices, etc.
 
