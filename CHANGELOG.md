@@ -31,6 +31,11 @@ one. Everything below landed after 0.1.2, which was cut before any of it.
 
 ### Changed
 
+- **Elixir 1.20 or newer is required** (was 1.15). The older floor was a
+  claim nothing tested — CI has only ever run one version — and a
+  requirement that is asserted rather than exercised is a promise to
+  whoever hits it first. Raised before publication, while nobody is on
+  0.2.0 yet.
 - **A 401 renews the session instead of failing.** The API verbs and
   `download/4` re-authenticate once and retry when the console says the
   session has expired (#16) — and concurrent callers renew **once**
