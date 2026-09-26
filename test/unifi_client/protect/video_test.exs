@@ -1,6 +1,8 @@
 defmodule UnifiClient.Protect.VideoTest do
   use ExUnit.Case, async: true
 
+  doctest UnifiClient.Protect.Video
+
   alias UnifiClient.{Client, Error}
   alias UnifiClient.Protect.Video
 

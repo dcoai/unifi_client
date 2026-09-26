@@ -5,6 +5,12 @@ defmodule UnifiClient.Auth do
   Handles login and logout operations for local UniFi controllers
   (UDM Pro, UniFi OS, and standard controllers).
 
+  One session serves **both** applications: Network and Protect share a
+  console and a login, so a client authenticated here can be handed to
+  `UnifiClient.API.*` and `UnifiClient.Protect.*` alike. The Cloud Site
+  Manager is separate and takes an API key —
+  `UnifiClient.Cloud.Client.new/1`.
+
   ## Authentication Flow
 
   1. Call `login/1` with a configured client

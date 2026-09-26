@@ -2,6 +2,10 @@ defmodule UnifiClient.API.Sites do
   @moduledoc """
   API operations for UniFi sites.
 
+  Part of the **Network** application. `client` is an authenticated
+  `UnifiClient.Client` (`UnifiClient.Auth.login/1`); the names this returns
+  are what every other Network call takes as its `site`.
+
   A site in UniFi represents a logical grouping of devices and configuration.
   Most controllers have at least one site, typically named "default".
 

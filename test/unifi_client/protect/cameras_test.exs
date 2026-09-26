@@ -1,6 +1,8 @@
 defmodule UnifiClient.Protect.CamerasTest do
   use ExUnit.Case, async: true
 
+  doctest UnifiClient.Protect.Cameras
+
   alias UnifiClient.{Client, Error}
   alias UnifiClient.Protect.Cameras
 

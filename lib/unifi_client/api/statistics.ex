@@ -2,6 +2,10 @@ defmodule UnifiClient.API.Statistics do
   @moduledoc """
   API operations for statistics and metrics.
 
+  Part of the **Network** application. `client` is an authenticated
+  `UnifiClient.Client` (`UnifiClient.Auth.login/1`), and `site` is a site
+  name as `UnifiClient.API.Sites.list/1` reports it — usually `"default"`.
+
   This module provides access to various statistics including
   bandwidth usage, DPI (Deep Packet Inspection) data, and
   historical metrics.

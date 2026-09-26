@@ -539,7 +539,9 @@ takes a trailing `opts` keyword list; the keys it documents are consumed and
 the rest go to `Req.request/2`. Time arguments accept `DateTime.t()` or an
 integer of epoch milliseconds, normalised by `Protect.Time.to_ms/1`.
 
-`UnifiClient.Protect.API` (internal, `@moduledoc false`) is the one place
+UnifiClient.Protect.API — internal, `@moduledoc false`, and so deliberately
+absent from the published documentation, which is why it is named here
+without a link — is the one place
 that sets `app: :protect`: `get/3`, `post/4`, `patch/4`, `download/4`, and
 `with_query/2`, which appends only the non-`nil` params and omits the `?`
 when none remain.
@@ -707,4 +709,16 @@ those scripts read and point at the module documentation for the rest.
 - `UnifiClient.version/0` returns the package version string and must match
   `@version` in `mix.exs` (the test asserts against `Mix.Project.config()`,
   not a literal).
-- ExDoc `extras` include `README.md` and this `spec.md`.
+- ExDoc `extras` include `README.md`, this `spec.md` and the examples'
+  index, and `mix docs` must finish with **no warnings**.
+- **The documentation is tested.** `test/documentation_test.exs` fails when
+  a public function has no `@doc` and no `@doc false`, and when a module has
+  no `@moduledoc` — the generated functions (`__struct__`, `child_spec`) and
+  the callbacks of whatever behaviours a module implements are read from the
+  module rather than listed, and a module that is `@moduledoc false` is
+  internal whole, so its functions are not asked to repeat the marker.
+- **Every `iex>` example in `lib/` is a doctest.** The library's examples are
+  pure — URL builders, timeout arithmetic, parsers — so there is no reason
+  for a documented example to go unverified: `doctest` runs all twelve, and
+  a doc that drifts from the code fails the suite rather than misleading a
+  reader.
