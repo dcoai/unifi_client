@@ -1,20 +1,32 @@
 # UnifiClient
 
-[![pipeline](https://gitlab.conet.yarina.org/dco-tek/unifi_client/badges/main/pipeline.svg)](https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/pipelines)
+[![Hex.pm](https://img.shields.io/hexpm/v/unifi_client.svg)](https://hex.pm/packages/unifi_client)
+[![Docs](https://img.shields.io/badge/docs-hexdocs-purple.svg)](https://hexdocs.pm/unifi_client)
+[![License](https://img.shields.io/hexpm/l/unifi_client.svg)](https://github.com/dcoai/unifi_client/blob/main/LICENSE)
 
-This is an Elixir client for Unifi Networks
+An Elixir client for **UniFi Network** and **UniFi Protect** — the two
+applications on a UniFi OS console — and for Ubiquiti's **Cloud Site
+Manager**.
 
-This is the first version it is very raw, some things work, some aren't tested.  It is a work in progress.
+One authenticated client serves both local applications: Network and Protect
+share a console and a login, so a session opened for one works for the other.
+
+| | |
+|---|---|
+| **Network** | sites, devices (including PoE), clients, wireless and LAN configuration, firewall rules and port forwards, traffic statistics, live events over WebSocket |
+| **Protect** | cameras and snapshots, recorded events with thumbnails and heatmaps, MP4 export of recorded video, live updates over Protect's binary WebSocket |
+| **Cloud** | hosts, sites, devices and clients through the Site Manager API, with an API key rather than a console login |
+
+Talks to UDM Pro and other UniFi OS consoles, self-hosted controllers
+(`type: :controller` — Network only; Protect is UniFi OS), and
+`api.ui.com`.
 
 ## Installation
-
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `unifi_client` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:unifi_client, "~> 0.2.0"}
+    {:unifi_client, "~> 0.2"}
   ]
 end
 ```
@@ -22,31 +34,44 @@ end
 Requires **Elixir 1.20 or newer** — the version this library is built and
 tested on.
 
-## Quick Start
+### What you need
 
-see examples in the `examples/` directory.
+- A console reachable from where the code runs. It is a device on your LAN;
+  nothing here goes through Ubiquiti's cloud except the `Cloud` modules.
+- A **local** console account — one created on the console itself, not a
+  Ubiquiti SSO login — **without MFA**. Give it the least role that can do
+  what you need.
+- Consoles ship a self-signed certificate, so `verify_ssl: false` is the
+  usual setting on a LAN. It means what it says; consider it before pointing
+  this at anything that is not your own network.
 
-```bash
-examples
-├── client_list.exs
-├── device_list.exs
-├── device_poe.exs
-├── list_sites.exs
-├── protect_cameras.exs
-├── protect_watch.exs
-└── protect_export.exs
+## Network
+
+```elixir
+{:ok, client} =
+  UnifiClient.Client.new(
+    host: "192.168.1.1",
+    username: "admin",
+    password: "secret",
+    verify_ssl: false
+  )
+
+{:ok, client} = UnifiClient.Auth.login(client)
+
+{:ok, sites} = UnifiClient.API.Sites.list(client)
+{:ok, devices} = UnifiClient.API.Devices.list(client, "default")
+{:ok, active} = UnifiClient.API.Clients.list_active(client, "default")
+
+:ok = UnifiClient.Auth.logout(client)
 ```
 
-each script needs config information specified as environment variables, they can be run like:
+A session that the console has expired is renewed and the call retried, once,
+without the caller seeing it — and concurrent callers renew once between them
+rather than each starting a login.
 
 ```bash
-UNIFI_HOST=udmpro.my_net UNIFI_USER=admin UNIFI_PASS=secret elixir examples/device_list.exs
+UNIFI_HOST=udmpro.lan UNIFI_USER=admin UNIFI_PASS=secret elixir examples/device_list.exs
 ```
-
-all the scripts will take a `-h` or `--help` option to give a brief help message,
-and they run from any directory (the library is resolved relative to the script).
-A console that cannot be reached, or a login that is refused, prints the reason
-and exits 1.
 
 ## UniFi Protect
 
@@ -66,11 +91,6 @@ porch = Enum.find(cameras, &(&1["name"] == "Porch"))
 {:ok, "porch.jpg"} = UnifiClient.Protect.Cameras.snapshot(client, porch["id"], dest: "porch.jpg")
 ```
 
-```bash
-UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret \
-  elixir examples/protect_cameras.exs --snapshot <camera-id> --out porch.jpg
-```
-
 Recorded video is exported as MP4, streamed straight to disk. The console
 renders the clip on demand, so the call waits roughly as long as the clip is
 long (the timeout is derived from the window; pass `timeout:` to override):
@@ -83,12 +103,6 @@ finish = DateTime.add(start, 60, :second)
 # recent motion events and their thumbnails
 {:ok, events} = UnifiClient.Protect.Events.list(client, start: start, types: ["motion"])
 {:ok, jpeg} = UnifiClient.Protect.Events.thumbnail(client, hd(events)["id"])
-```
-
-```bash
-UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret \
-  elixir examples/protect_export.exs --camera <camera-id> \
-    --start 2026-09-17T08:00:00Z --end 2026-09-17T08:01:00Z --out porch.mp4
 ```
 
 Live updates arrive over Protect's binary WebSocket as
@@ -104,11 +118,44 @@ receive do
 end
 ```
 
-```bash
-UNIFI_HOST=unvr.local UNIFI_USER=admin UNIFI_PASS=secret elixir examples/protect_watch.exs
+## Cloud
+
+The Site Manager API reaches consoles through Ubiquiti rather than over your
+LAN, and authenticates with an API key from unifi.ui.com:
+
+```elixir
+{:ok, cloud} = UnifiClient.Cloud.Client.new(api_key: System.fetch_env!("UNIFI_API_KEY"))
+{:ok, hosts} = UnifiClient.Cloud.Sites.list_hosts(cloud)
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/unifi>.
+## Examples
 
+Twelve runnable scripts, one per public area — **[examples/](https://github.com/dcoai/unifi_client/blob/main/examples)**,
+indexed in [examples/README.md](https://github.com/dcoai/unifi_client/blob/main/examples/README.md) with what each shows and
+which credential it needs. Each is a single file you can copy out and run:
+
+```bash
+UNIFI_HOST=udmpro.lan UNIFI_USER=admin UNIFI_PASS=secret elixir examples/protect_cameras.exs
+```
+
+Every script takes `-h`/`--help` and prints its usage without touching the
+network, runs from any directory, and prints the reason and exits 1 when a
+console cannot be reached or a login is refused.
+
+## Documentation
+
+The API reference is on [HexDocs](https://hexdocs.pm/unifi_client).
+[`spec.md`](spec.md) is the library’s specification — what each module is
+for, which console endpoints it speaks to, and the rules the implementation
+follows.
+
+## Status
+
+Network and Protect are both implemented and covered by the suite; `spec.md`
+marks what each module supports. The console's own API is undocumented and
+varies by firmware, so responses are returned as the console sends them —
+maps with string keys — rather than being remodelled into structs.
+
+## License
+
+MIT — see [LICENSE](https://github.com/dcoai/unifi_client/blob/main/LICENSE).
