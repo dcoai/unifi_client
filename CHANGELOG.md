@@ -5,7 +5,7 @@ All notable changes to unifi_client are recorded here, in the shape of
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html);
 before 1.0.0 the minor number carries what the major will later.
 
-## [Unreleased]
+## [0.2.1] — 2026-10-02
 
 ### Fixed
 
@@ -79,6 +79,6 @@ one. Everything below landed after 0.1.2, which was cut before any of it.
 The starting point of this changelog: a UniFi Network client with
 sessions, the API verbs, and the documentation generated from them.
 
-[Unreleased]: https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/compare/v0.2.0...main
-[0.2.0]: https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/releases/v0.2.0
-[0.1.2]: https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/releases/v0.1.2
+[0.2.1]: https://github.com/dcoai/unifi_client/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/dcoai/unifi_client/tree/v0.2.0
+[0.1.2]: https://hex.pm/packages/unifi_client/0.1.2
