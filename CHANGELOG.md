@@ -5,7 +5,7 @@ All notable changes to unifi_client are recorded here, in the shape of
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html);
 before 1.0.0 the minor number carries what the major will later.
 
-## [0.2.0] — 2026-09-23
+## [0.2.0] — 2026-10-02
 
 The release that made the library a Protect client, not only a Network
 one. Everything below landed after 0.1.2, which was cut before any of it.
