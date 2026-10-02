@@ -64,7 +64,8 @@ defmodule UnifiClient.Response do
   end
 
   def parse(%Req.Response{status: 401, body: body}) do
-    {:error, Error.authentication_error(extract_message(body))}
+    message = Error.message_from_body(body) || "Authentication failed"
+    {:error, Error.authentication_error(message, %{status: 401, body: body})}
   end
 
   def parse(%Req.Response{status: 404}) do
@@ -154,9 +155,4 @@ defmodule UnifiClient.Response do
         nil
     end
   end
-
-  defp extract_message(%{"meta" => %{"msg" => msg}}), do: msg
-  defp extract_message(%{"error" => msg}), do: msg
-  defp extract_message(%{"message" => msg}), do: msg
-  defp extract_message(_), do: nil
 end

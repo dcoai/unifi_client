@@ -47,6 +47,12 @@ one. Everything below landed after 0.1.2, which was cut before any of it.
 
 - The examples run again, and a GitLab CI gate keeps the suite honest
   (#20).
+- **`UnifiClient.Error`'s `message` is always a string.** A 401 whose
+  body nested the message (`{"error": {"message": "Unauthorized"}}`, seen
+  from a Protect export) put the whole map in `message`, and a 401 with no
+  recognisable message put `nil` there. One extractor now serves the API,
+  login and rate-limit paths, the raw body is kept in `reason`, and
+  `Error.new/3` refuses a non-string (#21, #30).
 
 ## [0.1.2] — 2025-12-05
 

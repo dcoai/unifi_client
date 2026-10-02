@@ -162,7 +162,7 @@ Cloud Key Gen2+). `:controller` is the self-hosted Network application.
 
 | Function | Behaviour |
 |---|---|
-| `login(client, opts \\ [])` | Requires `username` and `password` on the struct (else `{:error, %Error{code: :authentication_failed}}` without a request). POSTs `%{"username", "password", "remember"}` (`remember:` opt, default `true`) to `login_endpoint`. On 200 the cookies and `x-csrf-token` are already captured by the CookieJar response step; the CSRF token is copied onto the struct and `logged_in` set. Returns `{:ok, client}` — **use the returned struct for subsequent calls**; it is what enables §2.4's session renewal. 401/403 → `:authentication_failed` with the console's message (`errors[0]`, `error`, or `meta.msg`) or a default; other status → `:http_error`. |
+| `login(client, opts \\ [])` | Requires `username` and `password` on the struct (else `{:error, %Error{code: :authentication_failed}}` without a request). POSTs `%{"username", "password", "remember"}` (`remember:` opt, default `true`) to `login_endpoint`. On 200 the cookies and `x-csrf-token` are already captured by the CookieJar response step; the CSRF token is copied onto the struct and `logged_in` set. Returns `{:ok, client}` — **use the returned struct for subsequent calls**; it is what enables §2.4's session renewal. 401/403 → `:authentication_failed` with the console's message (`Error.message_from_body/1`, §2.6) or the default `"Invalid username or password"` / `"Access denied"`, and `reason: %{status:, body:}`; other status → `:http_error`. |
 | `logout(client)` | No-op `:ok` if not logged in. POSTs `{}` to `logout_endpoint`; 200 or 302 clears the jar and returns `:ok`. |
 | `self(client)` | GET `api_url("/api/self")` → `{:ok, user_map}` (first element of `data`). |
 | `authenticated?(client)` | `false` if `logged_in` is false; otherwise `self/1` succeeds. Makes a request. |
@@ -250,7 +250,9 @@ Parses `%Req.Response{}` for the local console.
    (the Protect error format) → `{:error, Error.api_error(body)}` on **any**
    status, checked before everything else. Then status 429, or a body with
    `"code" => "AUTHENTICATION_FAILED_LIMIT_REACHED"`, → `Error.rate_limited/2`.
-1. Status 401 → `Error.authentication_error(msg)`; 404 → `Error.not_found()`;
+1. Status 401 → `Error.authentication_error(msg, %{status: 401, body: body})`,
+   `msg` being `Error.message_from_body(body)` or `"Authentication failed"`
+   (§2.6); 404 → `Error.not_found()`;
    other non-2xx → `Error.http_error(status, body)`.
 2. 2xx body, by shape:
    - `%{"meta" => %{"rc" => "ok"}, "data" => data}` → `{:ok, data}` (the Network envelope).
@@ -271,17 +273,33 @@ no-body cases.
 
 | Constructor | `code` | Notes |
 |---|---|---|
-| `new(message, code \\ nil, reason \\ nil)` | as given | |
-| `authentication_error(msg \\ "Authentication failed")` | `:authentication_failed` | |
+| `new(message, code \\ nil, reason \\ nil)` | as given | `message` must be a binary; anything else raises `FunctionClauseError` |
+| `authentication_error(msg \\ "Authentication failed", reason \\ nil)` | `:authentication_failed` | `reason` is `%{status:, body:}` when the console answered (§2.2, §2.5) |
 | `not_found(resource \\ "Resource")` | `:not_found` | message `"#{resource} not found"` |
 | `connection_error(%Req.TransportError{reason: :timeout})` | `:timeout` | |
 | `connection_error(reason)` | `:connection_error` | `reason` is the Req exception |
 | `app_unavailable(app)` | `:app_unavailable` | `reason` is the app atom |
-| `rate_limited(body, retry_after \\ nil)` | `:rate_limited` | HTTP 429, or the UniFi OS body `code: "AUTHENTICATION_FAILED_LIMIT_REACHED"` on any status; `reason` is `%{status: 429, body:, retry_after: seconds \| nil}` from the `Retry-After` header. Also produced by `Auth.login/2` on a 429. |
-| `api_error(%{"meta" => %{"rc" => rc, "msg" => msg}})` | `String.to_atom(rc)` | Network envelope error |
+| `rate_limited(body, retry_after \\ nil)` | `:rate_limited` | message is `message_from_body(body)` or `"Rate limited by the console"`; HTTP 429, or the UniFi OS body `code: "AUTHENTICATION_FAILED_LIMIT_REACHED"` on any status; `reason` is `%{status: 429, body:, retry_after: seconds \| nil}` from the `Retry-After` header. Also produced by `Auth.login/2` on a 429. |
+| `api_error(%{"meta" => %{"rc" => rc, "msg" => msg}})` | `String.to_atom(rc)` | Network envelope error, `msg` a binary; a non-binary `msg` takes the next clause |
+| `api_error(%{"meta" => %{"rc" => rc}})` | `String.to_atom(rc)` | message `"API error: #{rc}"` |
 | `api_error(%{"error" => msg, "name" => name, "statusCode" => n})` | 401/403 → `:authentication_failed`, 404 → `:not_found`, else `:http_error` | Protect error; `reason` is `%{status:, name:}` |
 | `api_error(other)` | `:unknown` | `reason` is the body |
 | `http_error(status, body \\ nil)` | `:http_error` | `reason` is `%{status:, body:}`; message mapped for 400/401/403/404/500/502/503 |
+
+**`message` is always a binary.** Every constructor produces one, and
+`new/3` refuses anything else, so `Exception.message/1` is a string too. A
+console error body's message is found by `message_from_body/1` (public,
+`@doc false`), shared by `Response.parse/1`, `Auth.login/2` and
+`rate_limited/2`. It returns a binary or `nil`, never another term:
+
+1. `%{"meta" => %{"msg" => binary}}` → that binary.
+2. Otherwise the first of `"error"`, `"message"`, `"errors"` whose value
+   yields a message. A binary is the message, a map is searched by these
+   same rules (a Protect export has answered `{"error": {"code": 401,
+   "message": "Unauthorized"}}`), and a list yields its first element's
+   message.
+3. Anything else → `nil`, and the caller's default message applies. The
+   raw body is kept in `reason`.
 
 `UnifiClient.NotLoggedInError` is defined but not currently raised by any
 code path.

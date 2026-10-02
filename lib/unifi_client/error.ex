@@ -47,6 +47,10 @@ defmodule UnifiClient.Error do
 
   defexception [:message, :code, :reason]
 
+  # The keys a console error body carries its human-readable message
+  # under, in the order they are tried. See message_from_body/1.
+  @message_keys ["error", "message", "errors"]
+
   @type t :: %__MODULE__{
           message: String.t(),
           code: atom() | nil,
@@ -58,24 +62,27 @@ defmodule UnifiClient.Error do
 
   ## Parameters
 
-    * `message` - Human-readable error message
+    * `message` - Human-readable error message. Must be a string: a
+      non-binary raises `FunctionClauseError`, so a shape nobody can print
+      is stopped where it is made rather than in a caller's record.
     * `code` - Error code atom (e.g., `:not_found`)
     * `reason` - Additional error details
 
   """
   @spec new(String.t(), atom() | nil, term()) :: t()
-  def new(message, code \\ nil, reason \\ nil) do
+  def new(message, code \\ nil, reason \\ nil) when is_binary(message) do
     %__MODULE__{message: message, code: code, reason: reason}
   end
 
   @doc """
   Creates an authentication error.
 
-  Used when login fails or a session has expired.
+  Used when login fails or a session has expired. `reason` carries what
+  the console answered (`%{status:, body:}`) when there was an answer.
   """
-  @spec authentication_error(String.t()) :: t()
-  def authentication_error(message \\ "Authentication failed") do
-    new(message, :authentication_failed)
+  @spec authentication_error(String.t(), term()) :: t()
+  def authentication_error(message \\ "Authentication failed", reason \\ nil) do
+    new(message, :authentication_failed, reason)
   end
 
   @doc """
@@ -124,11 +131,7 @@ defmodule UnifiClient.Error do
   """
   @spec rate_limited(term(), non_neg_integer() | nil) :: t()
   def rate_limited(body, retry_after \\ nil) do
-    message =
-      case body do
-        %{"message" => msg} when is_binary(msg) -> msg
-        _ -> "Rate limited by the console"
-      end
+    message = message_from_body(body) || "Rate limited by the console"
 
     new(message, :rate_limited, %{status: 429, body: body, retry_after: retry_after})
   end
@@ -147,7 +150,7 @@ defmodule UnifiClient.Error do
       `name`.
   """
   @spec api_error(map()) :: t()
-  def api_error(%{"meta" => %{"msg" => msg, "rc" => rc}}) do
+  def api_error(%{"meta" => %{"msg" => msg, "rc" => rc}}) when is_binary(msg) do
     new(msg, String.to_atom(rc))
   end
 
@@ -185,6 +188,29 @@ defmodule UnifiClient.Error do
 
     new(message, :http_error, %{status: status, body: body})
   end
+
+  @doc false
+  # The human-readable message in a console error body, or nil.
+  #
+  # Total over terms and always a binary or nil: consoles put the message
+  # under `meta.msg` (Network), `error`, `message` or `errors: [first | _]`,
+  # and sometimes nest it one level deeper — a Protect export once answered
+  # `{"error": {"code": 401, "message": "Unauthorized"}}`. A nested map or
+  # list is searched the same way; anything else is nil, so the caller's
+  # default message applies.
+  @spec message_from_body(term()) :: String.t() | nil
+  def message_from_body(%{"meta" => %{"msg" => msg}}) when is_binary(msg), do: msg
+
+  def message_from_body(%{} = body) do
+    Enum.find_value(@message_keys, fn key -> body |> Map.get(key) |> message_from_value() end)
+  end
+
+  def message_from_body(_), do: nil
+
+  defp message_from_value(msg) when is_binary(msg), do: msg
+  defp message_from_value(%{} = nested), do: message_from_body(nested)
+  defp message_from_value([first | _]), do: message_from_value(first)
+  defp message_from_value(_), do: nil
 
   @impl true
   def message(%__MODULE__{message: message}), do: message

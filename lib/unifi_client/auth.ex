@@ -182,13 +182,13 @@ defmodule UnifiClient.Auth do
   end
 
   defp parse_login_error(%Req.Response{status: 401, body: body}) do
-    msg = extract_error_message(body) || "Invalid username or password"
-    Error.authentication_error(msg)
+    msg = Error.message_from_body(body) || "Invalid username or password"
+    Error.authentication_error(msg, %{status: 401, body: body})
   end
 
   defp parse_login_error(%Req.Response{status: 403, body: body}) do
-    msg = extract_error_message(body) || "Access denied"
-    Error.authentication_error(msg)
+    msg = Error.message_from_body(body) || "Access denied"
+    Error.authentication_error(msg, %{status: 403, body: body})
   end
 
   defp parse_login_error(%Req.Response{status: 429, body: body} = response) do
@@ -198,9 +198,4 @@ defmodule UnifiClient.Auth do
   defp parse_login_error(%Req.Response{status: status, body: body}) do
     Error.http_error(status, body)
   end
-
-  defp extract_error_message(%{"errors" => [error | _]}), do: error
-  defp extract_error_message(%{"error" => error}), do: error
-  defp extract_error_message(%{"meta" => %{"msg" => msg}}), do: msg
-  defp extract_error_message(_), do: nil
 end
