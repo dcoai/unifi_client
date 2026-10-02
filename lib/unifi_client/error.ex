@@ -20,6 +20,8 @@ defmodule UnifiClient.Error do
       `AUTHENTICATION_FAILED_LIMIT_REACHED` after too many logins);
       `reason.retry_after` is the `Retry-After` header in seconds when sent
     * `:error` - Generic API error from controller
+    * `:unknown` - An error body the client does not recognise, including
+      a Network `rc` other than `"error"`; `reason` keeps what was sent
 
   ## Error Handling
 
@@ -141,8 +143,10 @@ defmodule UnifiClient.Error do
 
   Understands both console error formats:
 
-    * Network: `%{"meta" => %{"rc" => "error", "msg" => msg}}` — the code is
-      the `rc` value as an atom.
+    * Network: `%{"meta" => %{"rc" => "error", "msg" => msg}}` — code
+      `:error`. Any other `rc` is `:unknown` with `reason: %{rc: rc}`: codes
+      come from a closed set, never from atoms minted from what the console
+      sent.
     * Protect: `%{"error" => msg, "name" => name, "statusCode" => status}` —
       the code follows the status (`:authentication_failed` for 401/403,
       `:not_found` for 404, `:http_error` otherwise) so callers can match on
@@ -150,8 +154,8 @@ defmodule UnifiClient.Error do
       `name`.
   """
   @spec api_error(map()) :: t()
-  def api_error(%{"meta" => %{"msg" => msg, "rc" => rc}}) when is_binary(msg) do
-    new(msg, String.to_atom(rc))
+  def api_error(%{"meta" => %{"msg" => msg, "rc" => rc}}) when is_binary(msg) and is_binary(rc) do
+    rc_error(msg, rc)
   end
 
   def api_error(%{"error" => msg, "name" => name, "statusCode" => status})
@@ -159,8 +163,8 @@ defmodule UnifiClient.Error do
     new(msg, code_for_status(status), %{status: status, name: name})
   end
 
-  def api_error(%{"meta" => %{"rc" => rc}}) do
-    new("API error: #{rc}", String.to_atom(rc))
+  def api_error(%{"meta" => %{"rc" => rc}}) when is_binary(rc) do
+    rc_error("API error: #{rc}", rc)
   end
 
   def api_error(response) do
@@ -214,6 +218,10 @@ defmodule UnifiClient.Error do
 
   @impl true
   def message(%__MODULE__{message: message}), do: message
+
+  # Network's result codes are "ok" and "error"; "ok" never reaches here.
+  defp rc_error(message, "error"), do: new(message, :error)
+  defp rc_error(message, rc), do: new(message, :unknown, %{rc: rc})
 
   defp code_for_status(status) when status in [401, 403], do: :authentication_failed
   defp code_for_status(404), do: :not_found

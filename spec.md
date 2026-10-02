@@ -280,11 +280,16 @@ no-body cases.
 | `connection_error(reason)` | `:connection_error` | `reason` is the Req exception |
 | `app_unavailable(app)` | `:app_unavailable` | `reason` is the app atom |
 | `rate_limited(body, retry_after \\ nil)` | `:rate_limited` | message is `message_from_body(body)` or `"Rate limited by the console"`; HTTP 429, or the UniFi OS body `code: "AUTHENTICATION_FAILED_LIMIT_REACHED"` on any status; `reason` is `%{status: 429, body:, retry_after: seconds \| nil}` from the `Retry-After` header. Also produced by `Auth.login/2` on a 429. |
-| `api_error(%{"meta" => %{"rc" => rc, "msg" => msg}})` | `String.to_atom(rc)` | Network envelope error, `msg` a binary; a non-binary `msg` takes the next clause |
-| `api_error(%{"meta" => %{"rc" => rc}})` | `String.to_atom(rc)` | message `"API error: #{rc}"` |
+| `api_error(%{"meta" => %{"rc" => rc, "msg" => msg}})` | `"error"` → `:error`; any other `rc` → `:unknown`, `reason: %{rc: rc}` | Network envelope error, `msg` and `rc` binaries; a non-binary `msg` takes the next clause |
+| `api_error(%{"meta" => %{"rc" => rc}})` | as above | message `"API error: #{rc}"`; a non-binary `rc` takes `api_error(other)` |
 | `api_error(%{"error" => msg, "name" => name, "statusCode" => n})` | 401/403 → `:authentication_failed`, 404 → `:not_found`, else `:http_error` | Protect error; `reason` is `%{status:, name:}` |
 | `api_error(other)` | `:unknown` | `reason` is the body |
 | `http_error(status, body \\ nil)` | `:http_error` | `reason` is `%{status:, body:}`; message mapped for 400/401/403/404/500/502/503 |
+
+**`code` never comes from console data.** Codes are a closed set of atoms
+written in the source; Network's `rc` is mapped (`"error"` → `:error`,
+anything else → `:unknown` with the string in `reason`), never passed to
+`String.to_atom/1`. A test fails if `lib/` creates atoms from strings.
 
 **`message` is always a binary.** Every constructor produces one, and
 `new/3` refuses anything else, so `Exception.message/1` is a string too. A
