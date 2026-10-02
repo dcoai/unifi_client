@@ -8,6 +8,9 @@ defmodule UnifiClient.VersionTest do
   than no changelog.
   """
 
+  # An `## [Unreleased]` section above it is Keep a Changelog's place for
+  # what has merged since; it is not a release, so it is skipped. Bumping
+  # mix.exs without renaming that section still fails here.
   test "the changelog's newest release is the version being shipped" do
     version = Mix.Project.config()[:version]
 
@@ -16,6 +19,7 @@ defmodule UnifiClient.VersionTest do
       |> File.read!()
       |> String.split("\n")
       |> Enum.filter(&String.starts_with?(&1, "## ["))
+      |> Enum.reject(&String.starts_with?(&1, "## [Unreleased]"))
       |> Enum.take(1)
 
     assert newest =~ "[#{version}]", "CHANGELOG.md starts with #{newest}, mix.exs says #{version}"

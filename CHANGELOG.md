@@ -5,6 +5,18 @@ All notable changes to unifi_client are recorded here, in the shape of
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html);
 before 1.0.0 the minor number carries what the major will later.
 
+## [Unreleased]
+
+### Fixed
+
+- **Error codes no longer mint atoms from console input.**
+  `Error.api_error/1` built a Network error's `code` with
+  `String.to_atom(rc)`. Atoms are never freed, so a long-running consumer
+  would grow the atom table with every unexpected `rc`, and a non-string
+  `rc` raised instead of returning an error. `"error"` is `:error` as
+  before; anything else is `:unknown`, with the value in `reason` (#29,
+  #32).
+
 ## [0.2.0] — 2026-10-02
 
 The release that made the library a Protect client, not only a Network
@@ -67,5 +79,6 @@ one. Everything below landed after 0.1.2, which was cut before any of it.
 The starting point of this changelog: a UniFi Network client with
 sessions, the API verbs, and the documentation generated from them.
 
+[Unreleased]: https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/compare/v0.2.0...main
 [0.2.0]: https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/releases/v0.2.0
 [0.1.2]: https://gitlab.conet.yarina.org/dco-tek/unifi_client/-/releases/v0.1.2

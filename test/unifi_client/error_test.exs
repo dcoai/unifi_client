@@ -153,4 +153,66 @@ defmodule UnifiClient.ErrorTest do
                Error.api_error(%{"meta" => %{"rc" => "error", "msg" => %{"x" => 1}}})
     end
   end
+
+  describe "api_error/1 and Network rc codes" do
+    test "rc \"error\" is :error, with or without msg" do
+      assert %Error{code: :error, message: "Invalid request", reason: nil} =
+               Error.api_error(%{"meta" => %{"rc" => "error", "msg" => "Invalid request"}})
+
+      assert %Error{code: :error, message: "API error: error"} =
+               Error.api_error(%{"meta" => %{"rc" => "error"}})
+    end
+
+    test "an unseen rc is :unknown and creates no atom" do
+      rc = "rc_never_seen_#{System.unique_integer([:positive])}"
+
+      assert %Error{code: :unknown, message: "m", reason: %{rc: ^rc}} =
+               Error.api_error(%{"meta" => %{"rc" => rc, "msg" => "m"}})
+
+      assert %Error{code: :unknown, reason: %{rc: ^rc}} =
+               Error.api_error(%{"meta" => %{"rc" => rc}})
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(rc) end
+    end
+
+    test "a non-binary rc is :unknown rather than a raise" do
+      body = %{"meta" => %{"rc" => 7, "msg" => "m"}}
+      assert %Error{code: :unknown, reason: ^body} = Error.api_error(body)
+    end
+
+    test "a Network error envelope through Response.parse/1 is still :error" do
+      body = %{"meta" => %{"rc" => "error", "msg" => "api.err.Invalid"}}
+
+      assert {:error, %Error{code: :error, message: "api.err.Invalid"}} =
+               Response.parse(%Req.Response{status: 200, body: body})
+    end
+  end
+
+  describe "no atoms from data" do
+    # Atoms are never garbage-collected, so lib/ must not make them from
+    # strings it was handed (#29). String.to_existing_atom/1 is fine.
+    @minting ~r/\b(String\.to_atom|List\.to_atom|binary_to_atom|list_to_atom)\(/
+
+    defp minting_sites(source) do
+      source
+      |> String.split("\n")
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {line, _} -> line =~ @minting end)
+    end
+
+    test "the scan finds what it is meant to find" do
+      assert [{_, 2}] = minting_sites("x = 1\ncode = String.to_atom(rc)\n")
+      assert [_] = minting_sites(":erlang.binary_to_atom(b, :utf8)")
+      assert [] = minting_sites("String.to_existing_atom(rc)")
+    end
+
+    test "lib/ creates no atoms from strings" do
+      found =
+        for path <- Path.wildcard("lib/**/*.ex"),
+            {line, n} <- minting_sites(File.read!(path)),
+            do: "#{path}:#{n}: #{String.trim(line)}"
+
+      assert found == [], "atoms minted from data:\n" <> Enum.join(found, "\n")
+    end
+  end
 end
