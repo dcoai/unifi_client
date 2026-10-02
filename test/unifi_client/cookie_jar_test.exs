@@ -26,6 +26,19 @@ defmodule UnifiClient.CookieJarTest do
     end
   end
 
+  describe "cookie_header/1" do
+    test "is empty for an empty jar" do
+      {:ok, jar} = CookieJar.start_link()
+      assert CookieJar.cookie_header(jar) == ""
+    end
+
+    test "joins each cookie's name=value pair, dropping attributes" do
+      {:ok, jar} = CookieJar.start_link()
+      CookieJar.put_cookies(jar, ["SESSION=abc123; Path=/; HttpOnly", " CSRF=xyz789 ; Path=/"])
+      assert CookieJar.cookie_header(jar) == "SESSION=abc123; CSRF=xyz789"
+    end
+  end
+
   describe "get_csrf_token/1" do
     test "returns nil when no CSRF token" do
       {:ok, jar} = CookieJar.start_link()

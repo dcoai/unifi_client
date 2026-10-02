@@ -78,7 +78,7 @@ UnifiClient.API             HTTP verbs for the local console (internal-ish)
 UnifiClient.API.*           Network endpoints, one module per area
 UnifiClient.Response        Network envelope parsing (internal)
 UnifiClient.Error           the error struct and constructors
-UnifiClient.WebSocket.*     Network event stream
+UnifiClient.WebSocket.*     Network event stream; WebSocket.Base, shared by both streams (§4.1)
 UnifiClient.Cloud.*         Site Manager (api.ui.com)
 UnifiClient.Protect         bootstrap / nvr (§6.2)
 UnifiClient.Protect.API     Protect request helpers (internal)
@@ -178,15 +178,15 @@ renewal and tests.
 |---|---|
 | `start_link(opts \\ [])` | Starts the agent. |
 | `get_cookies(jar)` / `put_cookies(jar, [set_cookie_header])` | Stored as the raw `Set-Cookie` header strings. `put_cookies` also derives the CSRF token when the cookies carry one: a `csrf_token=` cookie's value (self-hosted controller), or the `csrfToken` claim of the JWT in a `TOKEN=` cookie (UniFi OS). Anything else leaves the stored token alone; a malformed JWT is simply no token. |
+| `cookie_header(jar)` | The `Cookie` value: each stored header's `name=value` (everything after its first `;` dropped), joined with `"; "`; `""` when empty. Read at call time. The one place the header is built, for the request step and the WebSocket clients. |
 | `get_csrf_token(jar)` / `put_csrf_token(jar, token)` | |
 | `clear(jar)` | Drops cookies and token (generation and lock untouched). |
 | `generation(jar)` | Incremented by each successful `renew/3`. |
 | `renew(jar, seen, login_fun)` | **Single-flight renewal.** If `generation > seen` → `{:ok, :already_renewed}`. Otherwise the first caller takes the lock and runs `login_fun` *in its own process* (the request steps call the agent, so the login cannot run inside it); later callers wait, monitoring the owner. On `{:ok, _}` the generation is bumped and the owner and every waiter get `{:ok, :renewed}`; on `{:error, e}` all get `{:error, e}` and the generation is unchanged. If the owner dies mid-login a waiter clears the lock and takes over. |
 | `attach(req, jar)` | Prepends request step `unifi_add_cookies` and appends response step `unifi_save_cookies`. |
 
-Request step: sends `cookie: name=value; name=value` built from the stored
-headers (everything after the first `;` of each stored string is dropped),
-and sends `x-csrf-token` on **POST, PUT, DELETE and PATCH** when a token is
+Request step: sends `cookie: <cookie_header(jar)>` when the jar holds
+cookies, and sends `x-csrf-token` on **POST, PUT, DELETE and PATCH** when a token is
 held. Response step: stores every `set-cookie` header (deriving a token from
 them as above), then the `x-csrf-token` header if present — so the header,
 the console's most explicit statement, wins over a cookie-derived token
@@ -437,15 +437,28 @@ SSL verification follows the client's `verify_ssl`.
 
 | Function | Behaviour |
 |---|---|
-| `start_link(client:, site:, subscriber: \\ self(), name: nil)` | Connects; the subscriber list starts as `[subscriber]`. |
-| `subscribe(ws, pid)` / `unsubscribe(ws, pid)` | Subscribers are monitored and dropped on `:DOWN`. |
+| `start_link(client:, site:, subscriber: \\ self(), name: nil)` | Connects; `subscriber` is the first subscriber. |
+| `subscribe(ws, pid)` / `unsubscribe(ws, pid)` | Subscribers are monitored and dropped on `:DOWN`; unsubscribing removes the monitor, and subscribing twice monitors once. |
 | `stop(ws)` | Closes the socket. |
+| `build_url(client, site)` | Pure. |
 
 Frame handling: `{:text, json}` is decoded and the raw map is sent to every
 subscriber as `{:unifi_event, map}`; undecodable text is logged at
 `warning`; `:ping` is answered with `:pong`; any other frame is logged at
 `debug` and ignored. Disconnects reconnect after 5 s, up to 10 attempts,
-then the process gives up (stays alive, no further reconnects).
+then the process gives up (stays alive, no further reconnects). Each
+attempt rebuilds the connection from `build_url/2` and the jar's *current*
+cookies, so a session renewed since the socket opened (§2.4) is the one a
+reconnect presents.
+
+**Shared with Protect (§6.3): `UnifiClient.WebSocket.Base`.** The two
+clients differ only in URL, frame decoding and message tag; the rest is
+plain functions in `Base` that their `WebSockex` callbacks delegate to (no
+`__using__` macro):
+
+- `conn_opts(client)`: `[extra_headers: [{"Cookie", CookieJar.cookie_header(jar)}], ssl_options:]`, SSL verification per `verify_ssl`.
+- The subscriber set, `%{pid => monitor_ref | nil}`: `subscribers(pid)` starts it; `monitor_all/1` monitors any not yet monitored and runs from `handle_connect/2`, since `start_link` runs in the caller and a monitor belongs to the process that made it; `subscribe/2`, `unsubscribe/2` (demonitor with `:flush`), `down/2`, `broadcast(subs, tag, message)`.
+- `reconnect(state, url, log_prefix, opts \\ [])`: below 10 attempts, sleeps `opts[:interval]` (default 5 000 ms) and returns `{:reconnect, WebSockex.Conn.new(url, conn_opts(client)), state}` with the attempt counted; at 10, logs and returns `{:ok, state}`.
 
 Event maps are the console's envelope: `%{"meta" => %{"message" => ...},
 "data" => [event, ...]}`.
@@ -611,7 +624,7 @@ time after).
 | Function | Behaviour |
 |---|---|
 | `start_link(client:, last_update_id: \\ nil, bootstrap_opts: \\ [], subscriber: \\ self(), name: nil)` | With `last_update_id` given, connects directly; otherwise calls `Protect.bootstrap/2` and uses its `"lastUpdateId"` — a bootstrap failure is returned as `{:error, %Error{}}` (`:app_unavailable` on a `:controller`, `:no_update_id` if the document lacks the cursor) before any socket is opened. |
-| `subscribe/2`, `unsubscribe/2`, `stop/1` | As §4.1; subscribers are monitored. |
+| `subscribe/2`, `unsubscribe/2`, `stop/1` | As §4.1, through `WebSocket.Base`. |
 | `build_url(client, last_update_id)` | Pure. |
 | `handle_binary(data, state)` | Pure: `{messages, state}` — see below. |
 
@@ -628,9 +641,10 @@ with it. `{:text, _}` frames are logged at `debug` and ignored; `:ping` is
 answered.
 
 Reconnect: 5 s between attempts, 10 attempts, then the process stays up
-without reconnecting (as §4.1) — but each attempt rebuilds the connection
-(`WebSockex.Conn.new`) from `build_url/2` with the *current* cursor and an
-empty buffer, so nothing already delivered is replayed.
+without reconnecting, with the connection rebuilt each attempt by
+`WebSocket.Base.reconnect/4` (as §4.1). Protect's URL carries the
+*current* cursor, and the buffer is emptied first, so nothing already
+delivered is replayed.
 
 Frames are **binary**. `UnifiClient.Protect.Frame.decode/1` (implemented)
 parses one packet:

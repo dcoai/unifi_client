@@ -33,9 +33,9 @@ defmodule UnifiClient.Protect.WebSocket do
 
   alias UnifiClient.{Client, Error, Protect}
   alias UnifiClient.Protect.Frame
+  alias UnifiClient.WebSocket.Base
 
-  @reconnect_interval 5_000
-  @max_reconnect_attempts 10
+  @log_prefix "[UnifiClient.Protect.WebSocket]"
 
   defstruct [
     :unifi_client,
@@ -48,7 +48,7 @@ defmodule UnifiClient.Protect.WebSocket do
   @type t :: %__MODULE__{
           unifi_client: Client.t(),
           last_update_id: String.t(),
-          subscribers: [pid()],
+          subscribers: Base.subscribers(),
           reconnect_attempts: non_neg_integer(),
           buffer: binary()
         }
@@ -83,10 +83,10 @@ defmodule UnifiClient.Protect.WebSocket do
       state = %__MODULE__{
         unifi_client: client,
         last_update_id: update_id,
-        subscribers: [subscriber]
+        subscribers: Base.subscribers(subscriber)
       }
 
-      ws_opts = conn_opts(client)
+      ws_opts = Base.conn_opts(client)
       ws_opts = if name, do: Keyword.put(ws_opts, :name, name), else: ws_opts
 
       WebSockex.start_link(build_url(client, update_id), __MODULE__, state, ws_opts)
@@ -147,86 +147,63 @@ defmodule UnifiClient.Protect.WebSocket do
 
   @impl WebSockex
   def handle_connect(_conn, state) do
-    Logger.info(
-      "[UnifiClient.Protect.WebSocket] Connected (lastUpdateId=#{state.last_update_id})"
-    )
-
-    {:ok, %{state | reconnect_attempts: 0}}
+    Logger.info("#{@log_prefix} Connected (lastUpdateId=#{state.last_update_id})")
+    {:ok, %{state | reconnect_attempts: 0, subscribers: Base.monitor_all(state.subscribers)}}
   end
 
   @impl WebSockex
   def handle_frame({:binary, data}, state) do
     {messages, state} = handle_binary(data, state)
-    Enum.each(messages, &broadcast(state.subscribers, &1))
+    Enum.each(messages, &Base.broadcast(state.subscribers, :unifi_protect_event, &1))
     {:ok, state}
   end
 
   def handle_frame({:text, msg}, state) do
-    Logger.debug("[UnifiClient.Protect.WebSocket] Ignoring text frame: #{inspect(msg)}")
+    Logger.debug("#{@log_prefix} Ignoring text frame: #{inspect(msg)}")
     {:ok, state}
   end
 
   def handle_frame({:ping, _}, state), do: {:reply, :pong, state}
 
   def handle_frame(frame, state) do
-    Logger.debug("[UnifiClient.Protect.WebSocket] Received frame: #{inspect(frame)}")
+    Logger.debug("#{@log_prefix} Received frame: #{inspect(frame)}")
     {:ok, state}
   end
 
   @impl WebSockex
   def handle_cast({:subscribe, pid}, state) do
-    Process.monitor(pid)
-    {:ok, %{state | subscribers: Enum.uniq([pid | state.subscribers])}}
+    {:ok, %{state | subscribers: Base.subscribe(state.subscribers, pid)}}
   end
 
   def handle_cast({:unsubscribe, pid}, state) do
-    {:ok, %{state | subscribers: List.delete(state.subscribers, pid)}}
+    {:ok, %{state | subscribers: Base.unsubscribe(state.subscribers, pid)}}
   end
 
   def handle_cast(:stop, state), do: {:close, state}
 
   @impl WebSockex
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    {:ok, %{state | subscribers: List.delete(state.subscribers, pid)}}
+    {:ok, %{state | subscribers: Base.down(state.subscribers, pid)}}
   end
 
   def handle_info(msg, state) do
-    Logger.debug("[UnifiClient.Protect.WebSocket] Received info: #{inspect(msg)}")
+    Logger.debug("#{@log_prefix} Received info: #{inspect(msg)}")
     {:ok, state}
   end
 
   @impl WebSockex
   def handle_disconnect(%{reason: reason}, state) do
-    Logger.warning("[UnifiClient.Protect.WebSocket] Disconnected: #{inspect(reason)}")
+    Logger.warning("#{@log_prefix} Disconnected: #{inspect(reason)}")
 
-    if state.reconnect_attempts < @max_reconnect_attempts do
-      attempt = state.reconnect_attempts + 1
-
-      Logger.info(
-        "[UnifiClient.Protect.WebSocket] Reconnecting in #{@reconnect_interval}ms " <>
-          "(attempt #{attempt}, resuming from #{state.last_update_id})"
-      )
-
-      Process.sleep(@reconnect_interval)
-
-      # Rebuild the connection so the resume cursor is the current one, and
-      # start from an empty buffer — a half-received message is gone.
-      conn =
-        WebSockex.Conn.new(
-          build_url(state.unifi_client, state.last_update_id),
-          conn_opts(state.unifi_client)
-        )
-
-      {:reconnect, conn, %{state | reconnect_attempts: attempt, buffer: <<>>}}
-    else
-      Logger.error("[UnifiClient.Protect.WebSocket] Max reconnect attempts reached, giving up")
-      {:ok, state}
-    end
+    # Resume from the current cursor, and from an empty buffer — a
+    # half-received message is gone with the connection.
+    state = %{state | buffer: <<>>}
+    Base.reconnect(state, build_url(state.unifi_client, state.last_update_id), @log_prefix)
   end
 
   @impl WebSockex
   def terminate(reason, _state) do
-    Logger.info("[UnifiClient.Protect.WebSocket] Terminating: #{inspect(reason)}")
+    Logger.info("#{@log_prefix} Terminating: #{inspect(reason)}")
     :ok
   end
 
@@ -265,31 +242,10 @@ defmodule UnifiClient.Protect.WebSocket do
 
       {:error, reason} ->
         Logger.warning(
-          "[UnifiClient.Protect.WebSocket] Dropping #{byte_size(bin)} undecodable bytes: #{inspect(reason)}"
+          "#{@log_prefix} Dropping #{byte_size(bin)} undecodable bytes: #{inspect(reason)}"
         )
 
         {Enum.reverse(acc), %{state | buffer: <<>>}}
     end
-  end
-
-  defp conn_opts(%Client{} = client) do
-    [
-      extra_headers: [{"Cookie", cookie_header(client)}],
-      ssl_options: ssl_options(client)
-    ]
-  end
-
-  defp cookie_header(%Client{cookie_jar: jar}) do
-    jar
-    |> UnifiClient.CookieJar.get_cookies()
-    |> Enum.map(fn cookie -> cookie |> String.split(";") |> List.first() |> String.trim() end)
-    |> Enum.join("; ")
-  end
-
-  defp ssl_options(%Client{verify_ssl: true}), do: []
-  defp ssl_options(%Client{verify_ssl: false}), do: [verify: :verify_none]
-
-  defp broadcast(subscribers, message) do
-    Enum.each(subscribers, &send(&1, {:unifi_protect_event, message}))
   end
 end

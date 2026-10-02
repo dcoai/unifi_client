@@ -142,6 +142,22 @@ defmodule UnifiClient.CookieJar do
   end
 
   @doc """
+  The jar's cookies as a `Cookie` request header value: each stored
+  `Set-Cookie` reduced to its `name=value` pair, joined with `"; "`. Empty
+  when the jar holds none.
+
+  Read at call time, so a session renewed since the client was built is
+  the one sent. Used by the HTTP request step and the WebSocket clients.
+  """
+  @spec cookie_header(pid()) :: String.t()
+  def cookie_header(jar) do
+    jar
+    |> get_cookies()
+    |> Enum.map(&extract_name_value/1)
+    |> Enum.join("; ")
+  end
+
+  @doc """
   Gets the current CSRF token.
   """
   @spec get_csrf_token(pid()) :: String.t() | nil
@@ -245,15 +261,12 @@ defmodule UnifiClient.CookieJar do
 
   # Request step: Add cookies and CSRF token
   defp add_cookies_step(req, jar) do
-    cookies = get_cookies(jar)
     csrf_token = get_csrf_token(jar)
 
     req =
-      if cookies != [] do
-        cookie_header = format_cookies(cookies)
-        Req.Request.put_header(req, "cookie", cookie_header)
-      else
-        req
+      case cookie_header(jar) do
+        "" -> req
+        header -> Req.Request.put_header(req, "cookie", header)
       end
 
     # Add CSRF token for modifying requests
@@ -279,14 +292,6 @@ defmodule UnifiClient.CookieJar do
     end
 
     {req, res}
-  end
-
-  # Format cookies for the Cookie header
-  # Takes full Set-Cookie values and extracts just name=value pairs
-  defp format_cookies(cookies) do
-    cookies
-    |> Enum.map(&extract_name_value/1)
-    |> Enum.join("; ")
   end
 
   defp extract_name_value(cookie) do
