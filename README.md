@@ -4,6 +4,8 @@
 [![Docs](https://img.shields.io/badge/docs-hexdocs-purple.svg)](https://hexdocs.pm/unifi_client)
 [![License](https://img.shields.io/hexpm/l/unifi_client.svg)](https://github.com/dcoai/unifi_client/blob/main/LICENSE)
 
+> Note: this library has worked well for my purposes, but is immature, and may have bugs. Please post an issue if you find any.
+
 An Elixir client for **UniFi Network** and **UniFi Protect** — the two
 applications on a UniFi OS console — and for Ubiquiti's **Cloud Site
 Manager**.
