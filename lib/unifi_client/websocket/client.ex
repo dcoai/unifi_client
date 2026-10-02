@@ -60,22 +60,24 @@ defmodule UnifiClient.WebSocket.Client do
 
   require Logger
 
-  @reconnect_interval 5_000
-  @max_reconnect_attempts 10
+  alias UnifiClient.Client
+  alias UnifiClient.WebSocket.Base
+
+  @log_prefix "[UnifiClient.WebSocket]"
 
   defstruct [
     :unifi_client,
     :site,
     :url,
     :subscribers,
-    :reconnect_attempts
+    reconnect_attempts: 0
   ]
 
   @type t :: %__MODULE__{
-          unifi_client: UnifiClient.Client.t(),
+          unifi_client: Client.t(),
           site: String.t(),
           url: String.t(),
-          subscribers: [pid()],
+          subscribers: Base.subscribers(),
           reconnect_attempts: non_neg_integer()
         }
 
@@ -102,30 +104,17 @@ defmodule UnifiClient.WebSocket.Client do
     subscriber = Keyword.get(opts, :subscriber, self())
     name = Keyword.get(opts, :name)
 
-    url = build_websocket_url(unifi_client, site)
-    cookies = get_cookies(unifi_client)
+    url = build_url(unifi_client, site)
 
     state = %__MODULE__{
       unifi_client: unifi_client,
       site: site,
       url: url,
-      subscribers: [subscriber],
-      reconnect_attempts: 0
+      subscribers: Base.subscribers(subscriber)
     }
 
-    ws_opts = [
-      extra_headers: [
-        {"Cookie", cookies}
-      ],
-      ssl_options: ssl_options(unifi_client)
-    ]
-
-    ws_opts =
-      if name do
-        Keyword.put(ws_opts, :name, name)
-      else
-        ws_opts
-      end
+    ws_opts = Base.conn_opts(unifi_client)
+    ws_opts = if name, do: Keyword.put(ws_opts, :name, name), else: ws_opts
 
     WebSockex.start_link(url, __MODULE__, state, ws_opts)
   end
@@ -156,23 +145,38 @@ defmodule UnifiClient.WebSocket.Client do
     WebSockex.cast(ws, :stop)
   end
 
+  @doc """
+  The event-stream URL for a client and site.
+
+  ## Example
+
+      iex> {:ok, client} = UnifiClient.Client.new(host: "udm.local")
+      iex> UnifiClient.WebSocket.Client.build_url(client, "default")
+      "wss://udm.local:443/proxy/network/wss/s/default/events"
+
+  """
+  @spec build_url(Client.t(), String.t()) :: String.t()
+  def build_url(%Client{host: host, port: port} = client, site) do
+    "wss://#{host}:#{port}#{Client.api_prefix(client)}/wss/s/#{site}/events"
+  end
+
   # WebSockex Callbacks
 
   @impl WebSockex
   def handle_connect(_conn, state) do
-    Logger.info("[UnifiClient.WebSocket] Connected to #{state.url}")
-    {:ok, %{state | reconnect_attempts: 0}}
+    Logger.info("#{@log_prefix} Connected to #{state.url}")
+    {:ok, %{state | reconnect_attempts: 0, subscribers: Base.monitor_all(state.subscribers)}}
   end
 
   @impl WebSockex
   def handle_frame({:text, msg}, state) do
     case Jason.decode(msg) do
       {:ok, event} ->
-        broadcast_event(state.subscribers, event)
+        Base.broadcast(state.subscribers, :unifi_event, event)
         {:ok, state}
 
       {:error, _} ->
-        Logger.warning("[UnifiClient.WebSocket] Failed to decode message: #{inspect(msg)}")
+        Logger.warning("#{@log_prefix} Failed to decode message: #{inspect(msg)}")
         {:ok, state}
     end
   end
@@ -182,20 +186,17 @@ defmodule UnifiClient.WebSocket.Client do
   end
 
   def handle_frame(frame, state) do
-    Logger.debug("[UnifiClient.WebSocket] Received frame: #{inspect(frame)}")
+    Logger.debug("#{@log_prefix} Received frame: #{inspect(frame)}")
     {:ok, state}
   end
 
   @impl WebSockex
   def handle_cast({:subscribe, pid}, state) do
-    Process.monitor(pid)
-    subscribers = Enum.uniq([pid | state.subscribers])
-    {:ok, %{state | subscribers: subscribers}}
+    {:ok, %{state | subscribers: Base.subscribe(state.subscribers, pid)}}
   end
 
   def handle_cast({:unsubscribe, pid}, state) do
-    subscribers = List.delete(state.subscribers, pid)
-    {:ok, %{state | subscribers: subscribers}}
+    {:ok, %{state | subscribers: Base.unsubscribe(state.subscribers, pid)}}
   end
 
   def handle_cast(:stop, state) do
@@ -204,71 +205,23 @@ defmodule UnifiClient.WebSocket.Client do
 
   @impl WebSockex
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    subscribers = List.delete(state.subscribers, pid)
-    {:ok, %{state | subscribers: subscribers}}
+    {:ok, %{state | subscribers: Base.down(state.subscribers, pid)}}
   end
 
   def handle_info(msg, state) do
-    Logger.debug("[UnifiClient.WebSocket] Received info: #{inspect(msg)}")
+    Logger.debug("#{@log_prefix} Received info: #{inspect(msg)}")
     {:ok, state}
   end
 
   @impl WebSockex
   def handle_disconnect(%{reason: reason}, state) do
-    Logger.warning("[UnifiClient.WebSocket] Disconnected: #{inspect(reason)}")
-
-    if state.reconnect_attempts < @max_reconnect_attempts do
-      Logger.info(
-        "[UnifiClient.WebSocket] Reconnecting in #{@reconnect_interval}ms (attempt #{state.reconnect_attempts + 1})"
-      )
-
-      Process.sleep(@reconnect_interval)
-      {:reconnect, %{state | reconnect_attempts: state.reconnect_attempts + 1}}
-    else
-      Logger.error("[UnifiClient.WebSocket] Max reconnect attempts reached, giving up")
-      {:ok, state}
-    end
+    Logger.warning("#{@log_prefix} Disconnected: #{inspect(reason)}")
+    Base.reconnect(state, state.url, @log_prefix)
   end
 
   @impl WebSockex
   def terminate(reason, _state) do
-    Logger.info("[UnifiClient.WebSocket] Terminating: #{inspect(reason)}")
+    Logger.info("#{@log_prefix} Terminating: #{inspect(reason)}")
     :ok
-  end
-
-  # Private functions
-
-  defp build_websocket_url(%UnifiClient.Client{} = client, site) do
-    host = client.host
-    port = client.port
-    prefix = UnifiClient.Client.api_prefix(client)
-
-    "wss://#{host}:#{port}#{prefix}/wss/s/#{site}/events"
-  end
-
-  defp get_cookies(%UnifiClient.Client{cookie_jar: jar}) do
-    jar
-    |> UnifiClient.CookieJar.get_cookies()
-    |> Enum.map(&extract_name_value/1)
-    |> Enum.join("; ")
-  end
-
-  defp extract_name_value(cookie) do
-    cookie
-    |> String.split(";")
-    |> List.first()
-    |> String.trim()
-  end
-
-  defp ssl_options(%UnifiClient.Client{verify_ssl: true}), do: []
-
-  defp ssl_options(%UnifiClient.Client{verify_ssl: false}) do
-    [verify: :verify_none]
-  end
-
-  defp broadcast_event(subscribers, event) do
-    Enum.each(subscribers, fn pid ->
-      send(pid, {:unifi_event, event})
-    end)
   end
 end

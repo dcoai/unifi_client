@@ -53,6 +53,14 @@ one. Everything below landed after 0.1.2, which was cut before any of it.
   recognisable message put `nil` there. One extractor now serves the API,
   login and rate-limit paths, the raw body is kept in `reason`, and
   `Error.new/3` refuses a non-string (#21, #30).
+- **The Network WebSocket reconnects with the current session.** It
+  captured its cookie when it started and reused it on every reconnect,
+  so after a session renewal each attempt presented a dead session until
+  it gave up. Both WebSocket clients now share
+  `UnifiClient.WebSocket.Base`, which rebuilds the connection from the
+  cookie jar on each attempt. It also monitors every subscriber,
+  including the first, and removes the monitor on `unsubscribe/2`
+  (#13, #31).
 
 ## [0.1.2] — 2025-12-05
 
